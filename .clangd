@@ -9,3 +9,9 @@ CompileFlags:
     - -std=c++17
     - -std=c++14
     - -std=c++11
+
+# Force all .h headers to be parsed as standard C headers (not C++ or Objective-C++)
+If:
+  PathMatch: .*\.h$
+CompileFlags:
+  Add: [-xc-header]

@@ -26,4 +26,9 @@ double db_get_sleep_7d_avg(sqlite3 *db);
 void db_get_today_nutrition(sqlite3 *db, double *out_calories, double *out_protein, double *out_carbs, double *out_fat);
 bool db_get_last_trained(sqlite3 *db, int *out_days_since, char *out_last_day, int max_day_len);
 
+/* Telemetry Writing Operations */
+bool db_log_bodyweight(sqlite3 *db, double weight_kg, double waist_cm);
+bool db_log_sleep(sqlite3 *db, double hours, int quality);
+bool db_log_nutrition(sqlite3 *db, const char *meal, double calories, double protein, double carbs, double fat);
+
 #endif

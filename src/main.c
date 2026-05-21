@@ -16,9 +16,93 @@ static char* str_dup(const char* str) {
 
 int main(int argc, char *argv[]) {
 
+    /* Route: soma bodyweight log <weight> [waist] */
+    if (argc >= 2 && strcmp(argv[1], "bodyweight") == 0) {
+        if (argc < 4 || strcmp(argv[2], "log") != 0) {
+            fprintf(stderr, "Usage: soma bodyweight log <weight_kg> [waist_cm]\n");
+            return 1;
+        }
+        double weight = atof(argv[3]);
+        double waist = (argc >= 5) ? atof(argv[4]) : -1.0;
+        if (weight <= 0.0) {
+            fprintf(stderr, "error: weight must be greater than 0\n");
+            return 1;
+        }
+        sqlite3 *db = db_open();
+        if (db_log_bodyweight(db, weight, waist)) {
+            if (waist > 0.0) {
+                printf(POSITIVE "✓ " RESET "Logged bodyweight: " ACCENT BOLD "%.1f kg" RESET ", waist: " ACCENT BOLD "%.1f cm" RESET "\n", weight, waist);
+            } else {
+                printf(POSITIVE "✓ " RESET "Logged bodyweight: " ACCENT BOLD "%.1f kg" RESET "\n", weight);
+            }
+            db_close(db);
+            return 0;
+        } else {
+            fprintf(stderr, "error: failed to log bodyweight\n");
+            db_close(db);
+            return 1;
+        }
+    }
+
+    /* Route: soma sleep log <hours> <quality> */
+    if (argc >= 2 && strcmp(argv[1], "sleep") == 0) {
+        if (argc < 5 || strcmp(argv[2], "log") != 0) {
+            fprintf(stderr, "Usage: soma sleep log <hours> <quality_1_to_5>\n");
+            return 1;
+        }
+        double hours = atof(argv[3]);
+        int quality = atoi(argv[4]);
+        if (hours < 0.0 || hours > 24.0) {
+            fprintf(stderr, "error: sleep hours must be between 0 and 24\n");
+            return 1;
+        }
+        if (quality < 1 || quality > 5) {
+            fprintf(stderr, "error: sleep quality must be an integer between 1 and 5\n");
+            return 1;
+        }
+        sqlite3 *db = db_open();
+        if (db_log_sleep(db, hours, quality)) {
+            printf(POSITIVE "✓ " RESET "Logged sleep: " ACCENT BOLD "%.1f hours" RESET " (quality: " ACCENT BOLD "%d/5" RESET ")\n", hours, quality);
+            db_close(db);
+            return 0;
+        } else {
+            fprintf(stderr, "error: failed to log sleep\n");
+            db_close(db);
+            return 1;
+        }
+    }
+
+    /* Route: soma nutrition log <calories> <protein> <carbs> <fat> */
+    if (argc >= 2 && strcmp(argv[1], "nutrition") == 0) {
+        if (argc < 7 || strcmp(argv[2], "log") != 0) {
+            fprintf(stderr, "Usage: soma nutrition log <calories> <protein_g> <carbs_g> <fat_g>\n");
+            return 1;
+        }
+        double calories = atof(argv[3]);
+        double protein = atof(argv[4]);
+        double carbs = atof(argv[5]);
+        double fat = atof(argv[6]);
+        if (calories < 0.0 || protein < 0.0 || carbs < 0.0 || fat < 0.0) {
+            fprintf(stderr, "error: nutrition values cannot be negative\n");
+            return 1;
+        }
+        sqlite3 *db = db_open();
+        if (db_log_nutrition(db, "CLI Log", calories, protein, carbs, fat)) {
+            printf(POSITIVE "✓ " RESET "Logged nutrition: " ACCENT BOLD "%.0f kcal" RESET " (P: " ACCENT "%.0fg" RESET ", C: " ACCENT "%.0fg" RESET ", F: " ACCENT "%.0fg" RESET ")\n",
+                   calories, protein, carbs, fat);
+            db_close(db);
+            return 0;
+        } else {
+            fprintf(stderr, "error: failed to log nutrition\n");
+            db_close(db);
+            return 1;
+        }
+    }
+
     /* Route: soma workout log --exercise ... --sets ... --reps ... --weight ... */
     if (argc >= 3 && strcmp(argv[1], "workout") == 0 && strcmp(argv[2], "log") == 0) {
         fprintf(stderr, "DEBUG: Parsing workout arguments (argc=%d)\n", argc - 2);
+
         /* Parse workout arguments starting from argv[3] */
         Workout* w = parse_workout_args(argc - 2, argv + 2);
         

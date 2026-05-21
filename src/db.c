@@ -629,3 +629,53 @@ bool db_get_last_trained(sqlite3 *db, int *out_days_since, char *out_last_day,
   }
   return found;
 }
+
+/* Telemetry Writing Operations */
+bool db_log_bodyweight(sqlite3 *db, double weight_kg, double waist_cm) {
+  sqlite3_stmt *stmt;
+  const char *sql;
+  if (waist_cm > 0.0) {
+    sql = "INSERT INTO bodyweight (weight_kg, waist_cm) VALUES (?, ?);";
+  } else {
+    sql = "INSERT INTO bodyweight (weight_kg) VALUES (?);";
+  }
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_double(stmt, 1, weight_kg);
+  if (waist_cm > 0.0) {
+    sqlite3_bind_double(stmt, 2, waist_cm);
+  }
+  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+  sqlite3_finalize(stmt);
+  return success;
+}
+
+bool db_log_sleep(sqlite3 *db, double hours, int quality) {
+  sqlite3_stmt *stmt;
+  const char *sql = "INSERT INTO sleep_log (hours, quality) VALUES (?, ?);";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_double(stmt, 1, hours);
+  sqlite3_bind_int(stmt, 2, quality);
+  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+  sqlite3_finalize(stmt);
+  return success;
+}
+
+bool db_log_nutrition(sqlite3 *db, const char *meal, double calories, double protein, double carbs, double fat) {
+  sqlite3_stmt *stmt;
+  const char *sql = "INSERT INTO nutrition_log (meal, protein_g, carbs_g, fat_g, calories) VALUES (?, ?, ?, ?, ?);";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, meal, -1, SQLITE_STATIC);
+  sqlite3_bind_double(stmt, 2, protein);
+  sqlite3_bind_double(stmt, 3, carbs);
+  sqlite3_bind_double(stmt, 4, fat);
+  sqlite3_bind_double(stmt, 5, calories);
+  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+  sqlite3_finalize(stmt);
+  return success;
+}

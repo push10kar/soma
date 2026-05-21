@@ -15,14 +15,23 @@ void print_logo(void);
 void print_separator(void);
 void print_thin_sep(void);
 void print_section(const char *title);
-void print_row(const char *label, const char *value, const char *delta);
-void print_row_neg(const char *label, const char *value, const char *delta);
+void print_row(const char *label, const char *value,
+               const char *delta);
+void print_row_neg(const char *label, const char *value,
+                   const char *delta);
 void print_verdict(const char *msg);
 void print_sparkline(double *values, int count);
-void print_bar(const char *label, double value, double target, const char *unit);
-void print_log_row(const char *label, const char *value, const char *note);
-void print_pr_badge(void);
+void print_bar(const char *label, double value,
+               double target, const char *unit);
+void print_log_row(const char *label, const char *value,
+                   const char *note);
+void print_pr_badge(const char *exercise, double orm);
 void print_hist_row(const char *date, const char *value,
                     const char *volume, int is_today);
+void print_volume_trend(double *volumes, int count,
+                        double pct_change);
+void print_today_header(int days_since, const char *last_day,
+                        double sleep_hrs, int sleep_logged,
+                        int weight_logged);
 
 #endif

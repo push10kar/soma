@@ -1,0 +1,19 @@
+# binary
+soma
+
+# compiled object files
+src/*.o
+
+# database — your personal data, never commit this
+*.db
+
+# editor junk
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db

@@ -4,6 +4,7 @@
 #include "db.h"
 #include "utils.h"
 #include "workout.h"
+#include "suggest.h"
 
 /* Static string copy helper for standard ISO C compliance */
 static char* str_dup(const char* str) {
@@ -97,6 +98,15 @@ int main(int argc, char *argv[]) {
             db_close(db);
             return 1;
         }
+    }
+
+    /* Route: soma suggest [exercise] */
+    if (argc >= 2 && strcmp(argv[1], "suggest") == 0) {
+        const char *filter = (argc >= 3) ? argv[2] : NULL;
+        sqlite3 *db = db_open();
+        print_suggestions(db, filter);
+        db_close(db);
+        return 0;
     }
 
     /* Route: soma workout log --exercise ... --sets ... --reps ... --weight ... */

@@ -297,25 +297,30 @@ int main(int argc, char *argv[]) {
     double prev_b_1rm = prev_b_w * (1.0 + prev_b_r / 30.0);
     double w_delta = latest_b_w - prev_b_w;
     double orm_delta = latest_b_1rm - prev_b_1rm;
+    double vol_delta = latest_b_vol - prev_b_vol;
 
     char log_w_str[32], log_prev_str[32], log_1rm_str[32], log_prev_1rm_str[32], log_vol_str[32];
     snprintf(log_w_str, sizeof(log_w_str), "%.0fkg × %d", latest_b_w, latest_b_r);
     snprintf(log_prev_str, sizeof(log_prev_str), "%.0fkg × %d", prev_b_w, prev_b_r);
     snprintf(log_1rm_str, sizeof(log_1rm_str), "%.1fkg", latest_b_1rm);
     snprintf(log_prev_1rm_str, sizeof(log_prev_1rm_str), "%+.1fkg", orm_delta);
-
     snprintf(log_vol_str, sizeof(log_vol_str), "%.0fkg", latest_b_vol);
 
     char w_delta_str[32] = "";
     if (w_delta > 0) snprintf(w_delta_str, sizeof(w_delta_str), "+%.1fkg", w_delta);
     else if (w_delta < 0) snprintf(w_delta_str, sizeof(w_delta_str), "%.1fkg", w_delta);
 
+    char vol_delta_str[32] = "";
+    if (vol_delta > 0) snprintf(vol_delta_str, sizeof(vol_delta_str), "%+.0fkg", vol_delta);
+    else if (vol_delta < 0) snprintf(vol_delta_str, sizeof(vol_delta_str), "%.0fkg", vol_delta);
+
     print_log_row("logged",      log_w_str,      "");
     print_log_row("last",        log_prev_str,   w_delta_str);
     print_log_row("est. 1rm",    log_1rm_str,    log_prev_1rm_str);
-    print_log_row("volume",      log_vol_str,    "");
+    print_log_row("volume",      log_vol_str,    vol_delta_str);
     print_log_row("session vol", log_vol_str,    "");
     print_pr_badge("bench press", latest_b_1rm);
+
 
     /* ── soma last bench ── */
     printf(DIM "  $ soma last bench\n\n" RESET);

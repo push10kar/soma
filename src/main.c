@@ -7,7 +7,33 @@
 #include "suggest.h"
 #include "status.h"
 
+static void print_help(void) {
+    printf("\n" ACCENT BOLD "  soma" RESET DIM "  ·  personal fitness ledger CLI" RESET "\n\n");
+    printf("  Usage: soma <command> [args]\n\n");
+    
+    printf(ACCENT "  ▸ display commands" RESET "\n");
+    printf("    %-32s%s\n", "soma [today]", "Unified Daily Briefing - compact logo, today's status badges, sleep/weight logged indicator, daily recommendation.");
+    printf("    %-32s%s\n", "soma status", "Full Health Ledger - long-form layout containing all dashboard grids for an end-of-week review.");
+    printf("    %-32s%s\n", "soma physique", "Physique Analytics - multi-week bodyweight and waist sparklines, weekly velocity averages, and progression metrics.");
+    printf("    %-32s%s\n", "soma recovery", "Recovery Analytics - daily sleep hour logs, weekly sleep averages, and CNS readiness scoring.");
+    printf("    %-32s%s\n", "soma nutrition", "Nutritional Progress - dynamic progress bars showing current macros logged today vs. total goals.");
+    printf("    %-32s%s\n", "soma suggest [exercise]", "Coaching Target - dynamic 30d progression target breakdown.");
+    printf("    %-32s%s\n\n", "soma history <exercise>", "workout log history and volume trends for a given exercise.");
+
+    printf(ACCENT "  ▸ logging commands" RESET "\n");
+    printf("    %-32s%s\n", "soma bodyweight log <w> [wt]", "Log daily bodyweight and optional waist measurement.");
+    printf("    %-32s%s\n", "soma sleep log <hrs> <ql>", "Log daily sleep hours and quality rating.");
+    printf("    %-32s%s\n", "soma nutrition log <c> <p> <cr> <f>", "Log daily macronutrients and calories.");
+    printf("    %-32s%s\n\n", "soma workout log ...", "Log a workout session.");
+}
+
 int main(int argc, char *argv[]) {
+
+    /* Route: help / --help / -h */
+    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "help") == 0)) {
+        print_help();
+        return 0;
+    }
 
     /* Route: soma bodyweight log <weight> [waist] */
     if (argc >= 3 && strcmp(argv[1], "bodyweight") == 0 && strcmp(argv[2], "log") == 0) {
@@ -196,20 +222,8 @@ int main(int argc, char *argv[]) {
     }
 
     // Fallback: unrecognized subcommand
-    fprintf(stderr, "error: command '%s' not recognized.\n\n", argv[1]);
-    fprintf(stderr, "Available commands:\n");
-    fprintf(stderr, "  soma today                    Shows compact daily briefing\n");
-    fprintf(stderr, "  soma status                   Shows all ledger sections at once\n");
-    fprintf(stderr, "  soma physique                 Shows physique analytics (weight, waist trends)\n");
-    fprintf(stderr, "  soma recovery                 Shows recovery analytics (sleep rolling average)\n");
-    fprintf(stderr, "  soma nutrition                Shows macro progress bars\n");
-    fprintf(stderr, "  soma suggest [exercise]       Shows target weights and coaching advice\n");
-    fprintf(stderr, "  soma history <exercise>       Shows history and volume trends (e.g. bench, squat, ohp)\n");
-    fprintf(stderr, "\nLogging commands:\n");
-    fprintf(stderr, "  soma workout log ...          Log a workout session\n");
-    fprintf(stderr, "  soma bodyweight log ...       Log daily bodyweight and waist\n");
-    fprintf(stderr, "  soma sleep log ...            Log daily sleep hours and quality\n");
-    fprintf(stderr, "  soma nutrition log ...        Log daily macro and calorie intake\n");
+    fprintf(stderr, NEGATIVE "error: command '%s' not recognized." RESET "\n", argv[1]);
+    print_help();
     
     db_close(db);
     return 1;

@@ -48,6 +48,17 @@ typedef struct {
 Workout* parse_workout_args(int argc, char* argv[]);
 
 /**
+ * Parse command-line shorthand arguments for workout logging
+ * 
+ * Expected format: <exercise> <weight>x<reps>x<sets>
+ * Example: bench 80x5x3
+ * 
+ * Returns: Workout struct with parsed data, or error set in the struct
+ * Caller must call free_workout() to cleanup
+ */
+Workout* parse_workout_shorthand(int argc, char* argv[]);
+
+/**
  * Log a workout to the database and detect personal records
  * 
  * Performs:

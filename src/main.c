@@ -27,7 +27,8 @@ static void print_help(void) {
     printf("    %-32s%s\n", "soma bodyweight log <w> [wt]", "Log daily bodyweight and optional waist measurement.");
     printf("    %-32s%s\n", "soma sleep log <hrs> <ql>", "Log daily sleep hours and quality rating.");
     printf("    %-32s%s\n", "soma nutrition log <c> <p> <cr> <f>", "Log daily macronutrients and calories.");
-    printf("    %-32s%s\n\n", "soma workout log ...", "Log a workout session.");
+    printf("    %-32s%s\n", "soma log <ex> <w>x<r>x<s>", "Shorthand Logging - e.g. soma log bench 80x5x3 (10 keystrokes).");
+    printf("    %-32s%s\n\n", "soma workout log ...", "Long-hand Logging - full parameter based logging.");
 }
 
 int main(int argc, char *argv[]) {
@@ -130,41 +131,59 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /* Route: soma workout log --exercise ... --sets ... --reps ... --weight ... */
+    /* Workout logging routing block (handles both shorthand and longhand) */
+    bool is_workout_log = false;
+    bool is_shorthand = false;
+    int arg_offset = 0;
+    
     if (argc >= 3 && strcmp(argv[1], "workout") == 0 && strcmp(argv[2], "log") == 0) {
-        fprintf(stderr, "DEBUG: Parsing workout arguments (argc=%d)\n", argc - 2);
-
-        /* Parse workout arguments starting from argv[3] */
-        Workout* w = parse_workout_args(argc - 2, argv + 2);
+        is_workout_log = true;
+        arg_offset = 2; // skip "workout", "log"
         
-        fprintf(stderr, "DEBUG: Parsed workout, checking errors\n");
+        // Check if any argument starting from index 3 starts with "--"
+        bool has_longhand_flag = false;
+        for (int i = 3; i < argc; i++) {
+            if (strncmp(argv[i], "--", 2) == 0) {
+                has_longhand_flag = true;
+                break;
+            }
+        }
+        is_shorthand = !has_longhand_flag;
+    } else if (argc >= 3 && strcmp(argv[1], "log") == 0) {
+        is_workout_log = true;
+        arg_offset = 1; // skip "log"
+        is_shorthand = true;
+    }
+    
+    if (is_workout_log) {
+        Workout* w = NULL;
+        if (is_shorthand) {
+            w = parse_workout_shorthand(argc - (arg_offset + 1), argv + (arg_offset + 1));
+        } else {
+            w = parse_workout_args(argc - arg_offset, argv + arg_offset);
+        }
+        
         if (!w) {
             fprintf(stderr, "error: failed to parse workout arguments\n");
             return 1;
         }
         
-        /* Check for parsing errors */
         if (w->error != WORKOUT_OK) {
             fprintf(stderr, "error: %s\n", w->error_msg ? w->error_msg : "unknown error");
             free_workout(w);
             return 1;
         }
         
-        fprintf(stderr, "DEBUG: Logging workout to database\n");
-        /* Log the workout to database */
         if (!log_workout(w)) {
             fprintf(stderr, "error: failed to log workout to database\n");
             free_workout(w);
             return 1;
         }
         
-        fprintf(stderr, "DEBUG: Workout logged successfully\n");
-        /* Print success confirmation */
         printf(POSITIVE "✓ " RESET "Logged " ACCENT BOLD "%s" RESET ": %d sets, " 
                ACCENT "%.0f kg-reps" RESET "\n", 
                w->exercise, w->num_sets, w->volume_kg);
         
-        /* Print PR badge if new personal record */
         if (w->is_new_pr) {
             double max_weight = get_max_weight(w->weights);
             if (max_weight > 0) {

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <sqlite3.h>
 #include "workout.h"
@@ -349,11 +350,13 @@ bool log_workout(Workout* w) {
         free(weights_arr_temp);
         free(reps_arr);
         
+        double estimated_1rm = max_weight * (1.0 + reps_for_max / 30.0);
+
         /* Insert or update personal_records */
         const char* insert_pr = 
             "INSERT OR REPLACE INTO personal_records "
-            "(exercise, weight_kg, reps, is_new_pr, achieved_at) "
-            "VALUES (?, ?, ?, 1, datetime('now','localtime'))";
+            "(exercise, weight_kg, reps, estimated_1rm, is_new_pr, achieved_at) "
+            "VALUES (?, ?, ?, ?, 1, datetime('now','localtime'))";
         
         sqlite3_stmt* stmt_insert;
         fprintf(stderr, "DEBUG: Preparing PR insert statement\n");
@@ -362,6 +365,7 @@ bool log_workout(Workout* w) {
             sqlite3_bind_text(stmt_insert, 1, w->exercise, -1, SQLITE_STATIC);
             sqlite3_bind_double(stmt_insert, 2, max_weight);
             sqlite3_bind_int(stmt_insert, 3, reps_for_max);
+            sqlite3_bind_double(stmt_insert, 4, estimated_1rm);
             
             fprintf(stderr, "DEBUG: Stepping PR insert\n");
             if (sqlite3_step(stmt_insert) != SQLITE_DONE) {
@@ -453,4 +457,128 @@ void free_workout(Workout* w) {
     if (w->error_msg) free(w->error_msg);
     
     free(w);
+}
+
+static const char* resolve_exercise_name(const char* name) {
+    if (strcasecmp(name, "bench") == 0 || strcasecmp(name, "bp") == 0 || strcasecmp(name, "bench press") == 0) {
+        return "bench press";
+    }
+    if (strcasecmp(name, "squat") == 0 || strcasecmp(name, "sq") == 0) {
+        return "squat";
+    }
+    if (strcasecmp(name, "ohp") == 0 || strcasecmp(name, "overhead") == 0 || strcasecmp(name, "overhead press") == 0 || strcasecmp(name, "press") == 0) {
+        return "overhead press";
+    }
+    if (strcasecmp(name, "deadlift") == 0 || strcasecmp(name, "dl") == 0) {
+        return "deadlift";
+    }
+    return name;
+}
+
+Workout* parse_workout_shorthand(int argc, char* argv[]) {
+    Workout* w = (Workout*)malloc(sizeof(Workout));
+    if (!w) {
+        return NULL;
+    }
+    w->exercise = NULL;
+    w->reps = NULL;
+    w->weights = NULL;
+    w->num_sets = 0;
+    w->volume_kg = 0.0;
+    w->is_new_pr = false;
+    w->error = WORKOUT_OK;
+    w->error_msg = NULL;
+
+    if (argc < 2) {
+        w->error = WORKOUT_ERR_VALIDATION_FAILED;
+        w->error_msg = str_dup("Invalid shorthand logging arguments. Usage: soma log <exercise> <weight>x<reps>x<sets>");
+        return w;
+    }
+
+    const char* expr = argv[argc - 1];
+    
+    size_t ex_size = 0;
+    for (int i = 0; i < argc - 1; i++) {
+        ex_size += strlen(argv[i]) + 1;
+    }
+    
+    char* exercise_raw = (char*)malloc(ex_size);
+    if (!exercise_raw) {
+        w->error = WORKOUT_ERR_MEMORY;
+        w->error_msg = str_dup("Memory allocation failed");
+        return w;
+    }
+    exercise_raw[0] = '\0';
+    for (int i = 0; i < argc - 1; i++) {
+        strcat(exercise_raw, argv[i]);
+        if (i < argc - 2) {
+            strcat(exercise_raw, " ");
+        }
+    }
+
+    const char* resolved = resolve_exercise_name(exercise_raw);
+    w->exercise = str_dup(resolved);
+    free(exercise_raw);
+
+    double weight = 0.0;
+    int reps = 0;
+    int sets = 0;
+    
+    char expr_lower[64];
+    strncpy(expr_lower, expr, sizeof(expr_lower));
+    expr_lower[sizeof(expr_lower) - 1] = '\0';
+    for (int i = 0; expr_lower[i]; i++) {
+        if (expr_lower[i] == 'X') expr_lower[i] = 'x';
+    }
+
+    if (sscanf(expr_lower, "%lfx%dx%d", &weight, &reps, &sets) != 3) {
+        w->error = WORKOUT_ERR_PARSE_FAILED;
+        w->error_msg = str_dup("Invalid shorthand expression format. Expected <weight>x<reps>x<sets> (e.g. 80x5x3)");
+        return w;
+    }
+
+    if (weight <= 0.0 || reps <= 0 || sets <= 0) {
+        w->error = WORKOUT_ERR_VALIDATION_FAILED;
+        w->error_msg = str_dup("Weight, reps, and sets must be positive numbers");
+        return w;
+    }
+
+    w->num_sets = sets;
+
+    size_t reps_len = (16 + 1) * sets;
+    size_t weights_len = (32 + 1) * sets;
+    w->reps = (char*)malloc(reps_len);
+    w->weights = (char*)malloc(weights_len);
+    if (!w->reps || !w->weights) {
+        if (w->reps) free(w->reps);
+        if (w->weights) free(w->weights);
+        w->error = WORKOUT_ERR_MEMORY;
+        w->error_msg = str_dup("Memory allocation failed");
+        return w;
+    }
+
+    w->reps[0] = '\0';
+    w->weights[0] = '\0';
+
+    char rep_item[16];
+    char weight_item[32];
+    snprintf(rep_item, sizeof(rep_item), "%d", reps);
+    if (weight == (int)weight) {
+        snprintf(weight_item, sizeof(weight_item), "%.0f", weight);
+    } else {
+        snprintf(weight_item, sizeof(weight_item), "%.1f", weight);
+    }
+
+    for (int i = 0; i < sets; i++) {
+        strcat(w->reps, rep_item);
+        strcat(w->weights, weight_item);
+        if (i < sets - 1) {
+            strcat(w->reps, ",");
+            strcat(w->weights, ",");
+        }
+    }
+
+    w->volume_kg = weight * reps * sets;
+
+    return w;
 }

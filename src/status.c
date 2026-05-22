@@ -909,3 +909,64 @@ void print_streak_dashboard(sqlite3 *db) {
 
   print_separator();
 }
+
+void print_prs_dashboard(sqlite3 *db) {
+  print_logo();
+  print_separator();
+
+  printf(DIM "  %-18s%-10s%-7s%-11s%s\n" RESET, "exercise", "weight", "reps", "est. 1rm", "date");
+  print_thin_sep();
+
+  sqlite3_stmt *stmt;
+  const char *sql = "SELECT exercise, weight_kg, reps, estimated_1rm, achieved_at FROM personal_records ORDER BY achieved_at DESC, estimated_1rm DESC;";
+  int count = 0;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      const char *ex = (const char *)sqlite3_column_text(stmt, 0);
+      double weight = sqlite3_column_double(stmt, 1);
+      int reps = sqlite3_column_int(stmt, 2);
+      double orm = sqlite3_column_double(stmt, 3);
+      const char *date_str = (const char *)sqlite3_column_text(stmt, 4);
+
+      char display_date[32] = "N/A";
+      if (date_str) {
+        int yr = 0, mo = 0, dy = 0;
+        if (sscanf(date_str, "%d-%d-%d", &yr, &mo, &dy) == 3) {
+          const char *months_names[] = {
+              "jan", "feb", "mar", "apr", "may", "jun",
+              "jul", "aug", "sep", "oct", "nov", "dec"
+          };
+          const char *month_name = (mo >= 1 && mo <= 12) ? months_names[mo - 1] : "unk";
+          snprintf(display_date, sizeof(display_date), "%s %02d", month_name, dy);
+        }
+      }
+
+      char wt_str[32];
+      if (weight == (int)weight) {
+        snprintf(wt_str, sizeof(wt_str), "%.0fkg", weight);
+      } else {
+        snprintf(wt_str, sizeof(wt_str), "%.1fkg", weight);
+      }
+
+      char orm_str[32];
+      if (orm == (int)orm) {
+        snprintf(orm_str, sizeof(orm_str), "%.0fkg", orm);
+      } else {
+        snprintf(orm_str, sizeof(orm_str), "%.1fkg", orm);
+      }
+
+      char reps_str[16];
+      snprintf(reps_str, sizeof(reps_str), "%d", reps);
+
+      printf("  %-18s%-10s%-7s%-11s%s\n", ex, wt_str, reps_str, orm_str, display_date);
+      count++;
+    }
+    sqlite3_finalize(stmt);
+  }
+
+  if (count == 0) {
+    printf(DIM "  no personal records logged yet. go set some!" RESET "\n");
+  }
+
+  print_separator();
+}

@@ -32,4 +32,7 @@ void print_weekly_review(sqlite3 *db);
 /* Renders consecutive days tracking streaks and discipline metrics */
 void print_streak_dashboard(sqlite3 *db);
 
+/* Renders the personal records leaderboard board */
+void print_prs_dashboard(sqlite3 *db);
+
 #endif /* STATUS_H */

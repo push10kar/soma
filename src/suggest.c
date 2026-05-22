@@ -189,6 +189,81 @@ static bool exercise_matches(const char *ex_name, const char *filter) {
   return false;
 }
 
+static double calculate_slope(double *y, int n) {
+  if (n < 2) return 0.0;
+  double sum_x = 0.0;
+  double sum_y = 0.0;
+  double sum_xx = 0.0;
+  double sum_xy = 0.0;
+  for (int i = 0; i < n; i++) {
+    double x = (double)i;
+    sum_x += x;
+    sum_y += y[i];
+    sum_xx += x * x;
+    sum_xy += x * y[i];
+  }
+  double denom = n * sum_xx - sum_x * sum_x;
+  if (denom == 0.0) return 0.0;
+  return (n * sum_xy - sum_x * sum_y) / denom;
+}
+
+typedef struct {
+  double weight;
+  int reps;
+  double vol;
+  double est_1rm;
+  char date[32];
+  long long timestamp;
+} SessionData;
+
+static int get_last_4_sessions(sqlite3 *db, const char *exercise, SessionData *sessions, int max_sessions) {
+  sqlite3_stmt *stmt;
+  const char *sql =
+      "SELECT weight_kg, reps, volume_kg, logged_at, strftime('%s', logged_at) FROM workouts "
+      "WHERE LOWER(exercise) = LOWER(?) "
+      "ORDER BY logged_at DESC, id DESC LIMIT ?;";
+
+  int count = 0;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, exercise, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, max_sessions);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < max_sessions) {
+      const char *w_str = (const char *)sqlite3_column_text(stmt, 0);
+      const char *r_str = (const char *)sqlite3_column_text(stmt, 1);
+      double vol = sqlite3_column_double(stmt, 2);
+      const char *date = (const char *)sqlite3_column_text(stmt, 3);
+      long long ts = sqlite3_column_int64(stmt, 4);
+
+      double w_val = 0.0;
+      int r_val = 0;
+      parse_last_set(w_str, r_str, &w_val, &r_val);
+
+      sessions[count].weight = w_val;
+      sessions[count].reps = r_val;
+      sessions[count].vol = vol;
+      sessions[count].est_1rm = w_val * (1.0 + r_val / 30.0);
+      if (date) {
+        snprintf(sessions[count].date, sizeof(sessions[count].date), "%.10s", date);
+      } else {
+        strcpy(sessions[count].date, "N/A");
+      }
+      sessions[count].timestamp = ts;
+      count++;
+    }
+    sqlite3_finalize(stmt);
+  }
+
+  // Reverse so sessions are in chronological order (oldest to newest)
+  for (int i = 0; i < count / 2; i++) {
+    SessionData temp = sessions[i];
+    sessions[i] = sessions[count - 1 - i];
+    sessions[count - 1 - i] = temp;
+  }
+
+  return count;
+}
+
 void print_suggestions(sqlite3 *db, const char *filter_exercise) {
   print_logo();
   print_separator();
@@ -225,40 +300,79 @@ void print_suggestions(sqlite3 *db, const char *filter_exercise) {
         snprintf(prog_str, sizeof(prog_str), DIM "— (0.0%%)" RESET);
       }
 
-      // Linear and autoregulated progression targets
+      // Linear and autoregulated progression targets based on last 4 sessions
+      SessionData last_4[4];
+      int count_4 = get_last_4_sessions(db, ex, last_4, 4);
+
       double target_w = latest_w;
       int target_r = latest_r;
-      char recommendation[128] = "";
+      char recommendation[256] = "";
 
-      if (strcasecmp(ex, "bench press") == 0) {
-        if (sleep_low) {
-          target_w = latest_w * 0.95; // Autoregulated Deload
-          snprintf(recommendation, sizeof(recommendation), WARNING "sleep compromised — recommend deload -5%%" RESET);
-        } else if (diff > 0.0) {
-          target_w = latest_w + 2.5;
-          snprintf(recommendation, sizeof(recommendation), POSITIVE "progressing well — attempt +2.5kg target" RESET);
-        } else {
-          snprintf(recommendation, sizeof(recommendation), WARNING "stalled — attempt reps PR at current weight" RESET);
+      if (count_4 >= 2) {
+        double est_1rms[4];
+        for (int j = 0; j < count_4; j++) {
+          est_1rms[j] = last_4[j].est_1rm;
         }
-      } else if (strcasecmp(ex, "squat") == 0) {
+        double slope = calculate_slope(est_1rms, count_4);
+        
+        // Calculate time difference between oldest and newest in days
+        double days_diff = (double)(last_4[count_4 - 1].timestamp - last_4[0].timestamp) / 86400.0;
+
         if (sleep_low) {
-          target_w = latest_w * 0.90; // Autoregulated deep Deload
-          snprintf(recommendation, sizeof(recommendation), WARNING "CNS fatigue — execute velocity deep squat deload" RESET);
-        } else if (diff > 0.0) {
-          target_w = latest_w + 2.5;
-          snprintf(recommendation, sizeof(recommendation), POSITIVE "knees adapted — step weight up by +2.5kg" RESET);
+          if (strcasecmp(ex, "squat") == 0) {
+            target_w = latest_w * 0.90; // Autoregulated Squat Deload
+            snprintf(recommendation, sizeof(recommendation), WARNING "CNS fatigue — execute velocity deep squat deload" RESET);
+          } else {
+            target_w = latest_w * 0.95; // Autoregulated Deload
+            snprintf(recommendation, sizeof(recommendation), WARNING "sleep compromised — recommend deload -5%%" RESET);
+          }
+        } else if (slope < -0.15) {
+          // Regressing
+          target_w = latest_w;
+          snprintf(recommendation, sizeof(recommendation), NEGATIVE "⚠️ REGRESSING - strength is dropping. check sleep & nutrition" RESET);
+        } else if (slope >= -0.15 && slope <= 0.15) {
+          // Stalled
+          if (days_diff >= 14.0) {
+            // Stalled 2+ weeks
+            target_w = latest_w * 0.90; // Recommend 10% deload
+            if (strcasecmp(ex, "bench press") == 0) {
+              snprintf(recommendation, sizeof(recommendation), WARNING "stalled 2+ wks — suggest close-grip variation or -10%% deload" RESET);
+            } else if (strcasecmp(ex, "squat") == 0) {
+              snprintf(recommendation, sizeof(recommendation), WARNING "stalled 2+ wks — suggest pause squats or -10%% deload" RESET);
+            } else {
+              snprintf(recommendation, sizeof(recommendation), WARNING "stalled 2+ wks — suggest push press variation or -10%% deload" RESET);
+            }
+          } else {
+            // Stalled but less than 2 weeks
+            target_w = latest_w;
+            if (strcasecmp(ex, "bench press") == 0) {
+              snprintf(recommendation, sizeof(recommendation), WARNING "stalled — attempt reps PR at current weight" RESET);
+            } else if (strcasecmp(ex, "squat") == 0) {
+              snprintf(recommendation, sizeof(recommendation), WARNING "stalled — focus on absolute hip crease velocity" RESET);
+            } else {
+              snprintf(recommendation, sizeof(recommendation), WARNING "stalled — add 1 extra rep to set" RESET);
+            }
+          }
         } else {
-          snprintf(recommendation, sizeof(recommendation), WARNING "stalled — focus on absolute hip crease velocity" RESET);
+          // Progressing
+          double increment = (strcasecmp(ex, "overhead press") == 0) ? 1.0 : 2.5;
+          target_w = latest_w + increment;
+          if (strcasecmp(ex, "bench press") == 0) {
+            snprintf(recommendation, sizeof(recommendation), POSITIVE "progressing well — attempt +2.5kg target" RESET);
+          } else if (strcasecmp(ex, "squat") == 0) {
+            snprintf(recommendation, sizeof(recommendation), POSITIVE "knees adapted — step weight up by +2.5kg" RESET);
+          } else {
+            snprintf(recommendation, sizeof(recommendation), POSITIVE "shoulder stable — attempt microload +1.0kg" RESET);
+          }
         }
-      } else if (strcasecmp(ex, "overhead press") == 0) {
+      } else {
+        // Fallback for insufficient history
         if (sleep_low) {
           target_w = latest_w * 0.95;
-          snprintf(recommendation, sizeof(recommendation), WARNING "shoulders fatigued — execute strict slow press" RESET);
-        } else if (diff > 0.0) {
-          target_w = latest_w + 1.0; // Micro-loading for slower OHP growth
-          snprintf(recommendation, sizeof(recommendation), POSITIVE "shoulder stable — attempt microload +1.0kg" RESET);
+          snprintf(recommendation, sizeof(recommendation), WARNING "sleep compromised — recommend deload -5%%" RESET);
         } else {
-          snprintf(recommendation, sizeof(recommendation), WARNING "stalled — add 1 extra rep to set" RESET);
+          target_w = latest_w;
+          snprintf(recommendation, sizeof(recommendation), DIM "insufficient history — attempt current workload" RESET);
         }
       }
 

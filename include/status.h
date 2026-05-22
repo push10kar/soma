@@ -26,4 +26,7 @@ void print_nutrition_dashboard(sqlite3 *db);
 /* Renders dynamic workout log history and volume trends for a given exercise */
 void print_exercise_history(sqlite3 *db, const char *exercise);
 
+/* Renders the Sunday weekly review dashboard */
+void print_weekly_review(sqlite3 *db);
+
 #endif /* STATUS_H */

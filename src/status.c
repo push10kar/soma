@@ -527,3 +527,249 @@ void print_exercise_history(sqlite3 *db, const char *input_ex) {
 
   print_separator();
 }
+
+
+static double get_prev_max_weight(sqlite3 *db, const char *exercise) {
+  sqlite3_stmt *stmt;
+  const char *sql = "SELECT weight_kg FROM workouts WHERE LOWER(exercise) = LOWER(?) AND logged_at < datetime('now', '-7 days', 'localtime');";
+  double prev_max = 0.0;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, exercise, -1, SQLITE_STATIC);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      const char *w_str = (const char *)sqlite3_column_text(stmt, 0);
+      if (w_str) {
+        char *dup = local_str_dup(w_str);
+        char *tok = strtok(dup, ",");
+        while (tok) {
+          double w = atof(tok);
+          if (w > prev_max) {
+            prev_max = w;
+          }
+          tok = strtok(NULL, ",");
+        }
+        free(dup);
+      }
+    }
+    sqlite3_finalize(stmt);
+  }
+  return prev_max;
+}
+
+static void render_progress_bar(char *out_bar, size_t max_len, double current, double target, int width) {
+  int filled = 0;
+  if (target > 0.0) {
+    double pct = current / target;
+    if (pct > 1.0) pct = 1.0;
+    if (pct < 0.0) pct = 0.0;
+    filled = (int)(pct * width);
+  }
+  char *p = out_bar;
+  for (int i = 0; i < width && (p - out_bar) < (int)max_len - 4; i++) {
+    if (i < filled) {
+      strcpy(p, "█");
+      p += 3;
+    } else {
+      strcpy(p, "░");
+      p += 3;
+    }
+  }
+  *p = '\0';
+}
+
+void print_weekly_review(sqlite3 *db) {
+  char start_date_raw[32] = "";
+  char end_date_raw[32] = "";
+
+  sqlite3_stmt *stmt_dates;
+  const char *sql_dates = "SELECT date('now', '-7 days', 'localtime'), date('now', 'localtime');";
+  if (sqlite3_prepare_v2(db, sql_dates, -1, &stmt_dates, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt_dates) == SQLITE_ROW) {
+      const char *s = (const char *)sqlite3_column_text(stmt_dates, 0);
+      const char *e = (const char *)sqlite3_column_text(stmt_dates, 1);
+      if (s) strcpy(start_date_raw, s);
+      if (e) strcpy(end_date_raw, e);
+    }
+    sqlite3_finalize(stmt_dates);
+  }
+
+  char week_range[128] = "N/A";
+  int s_yr = 0, s_mo = 0, s_dy = 0;
+  int e_yr = 0, e_mo = 0, e_dy = 0;
+  
+  const char *months_names[] = {
+      "jan", "feb", "mar", "apr", "may", "jun",
+      "jul", "aug", "sep", "oct", "nov", "dec"
+  };
+
+  if (sscanf(start_date_raw, "%d-%d-%d", &s_yr, &s_mo, &s_dy) == 3 &&
+      sscanf(end_date_raw, "%d-%d-%d", &e_yr, &e_mo, &e_dy) == 3) {
+    const char *s_month = (s_mo >= 1 && s_mo <= 12) ? months_names[s_mo - 1] : "unk";
+    const char *e_month = (e_mo >= 1 && e_mo <= 12) ? months_names[e_mo - 1] : "unk";
+
+    if (strcmp(s_month, e_month) == 0) {
+      snprintf(week_range, sizeof(week_range), "%s %d – %d", s_month, s_dy, e_dy);
+    } else {
+      snprintf(week_range, sizeof(week_range), "%s %d – %s %d", s_month, s_dy, e_month, e_dy);
+    }
+  }
+
+  int workouts_done = 0;
+  sqlite3_stmt *stmt_workouts;
+  const char *sql_workouts = "SELECT COUNT(DISTINCT date(logged_at)) FROM workouts WHERE logged_at >= datetime('now', '-7 days', 'localtime');";
+  if (sqlite3_prepare_v2(db, sql_workouts, -1, &stmt_workouts, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt_workouts) == SQLITE_ROW) {
+      workouts_done = sqlite3_column_int(stmt_workouts, 0);
+    }
+    sqlite3_finalize(stmt_workouts);
+  }
+
+  double avg_protein = 0.0;
+  sqlite3_stmt *stmt_prot;
+  const char *sql_prot = "SELECT AVG(protein_g) FROM nutrition_log WHERE logged_at >= datetime('now', '-7 days', 'localtime');";
+  if (sqlite3_prepare_v2(db, sql_prot, -1, &stmt_prot, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt_prot) == SQLITE_ROW) {
+      avg_protein = sqlite3_column_double(stmt_prot, 0);
+    }
+    sqlite3_finalize(stmt_prot);
+  }
+
+  double avg_sleep = 0.0;
+  sqlite3_stmt *stmt_sleep_val;
+  const char *sql_sleep_val = "SELECT AVG(hours) FROM sleep_log WHERE logged_at >= datetime('now', '-7 days', 'localtime');";
+  if (sqlite3_prepare_v2(db, sql_sleep_val, -1, &stmt_sleep_val, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt_sleep_val) == SQLITE_ROW) {
+      avg_sleep = sqlite3_column_double(stmt_sleep_val, 0);
+    }
+    sqlite3_finalize(stmt_sleep_val);
+  }
+
+  double weight_new = 0.0;
+  double weight_old = 0.0;
+  sqlite3_stmt *stmt_wt_new;
+  const char *sql_wt_new = "SELECT weight_kg FROM bodyweight ORDER BY logged_at DESC LIMIT 1;";
+  if (sqlite3_prepare_v2(db, sql_wt_new, -1, &stmt_wt_new, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt_wt_new) == SQLITE_ROW) {
+      weight_new = sqlite3_column_double(stmt_wt_new, 0);
+    }
+    sqlite3_finalize(stmt_wt_new);
+  }
+
+  sqlite3_stmt *stmt_wt_old;
+  const char *sql_wt_old = "SELECT weight_kg FROM bodyweight WHERE logged_at < datetime('now', '-7 days', 'localtime') ORDER BY logged_at DESC LIMIT 1;";
+  if (sqlite3_prepare_v2(db, sql_wt_old, -1, &stmt_wt_old, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt_wt_old) == SQLITE_ROW) {
+      weight_old = sqlite3_column_double(stmt_wt_old, 0);
+    }
+    sqlite3_finalize(stmt_wt_old);
+  }
+
+  if (weight_old <= 0.0) {
+    const char *sql_wt_oldest = "SELECT weight_kg FROM bodyweight ORDER BY logged_at ASC LIMIT 1;";
+    sqlite3_stmt *stmt_wt_oldest;
+    if (sqlite3_prepare_v2(db, sql_wt_oldest, -1, &stmt_wt_oldest, NULL) == SQLITE_OK) {
+      if (sqlite3_step(stmt_wt_oldest) == SQLITE_ROW) {
+        weight_old = sqlite3_column_double(stmt_wt_oldest, 0);
+      }
+      sqlite3_finalize(stmt_wt_oldest);
+    }
+  }
+
+  print_logo();
+  print_separator();
+
+  printf("  week  %s\n", week_range);
+  print_separator();
+
+  // Print Workouts
+  char wk_bar[64];
+  render_progress_bar(wk_bar, sizeof(wk_bar), (double)workouts_done, 4.0, 8);
+  double wk_pct = (double)workouts_done / 4.0 * 100.0;
+  if (wk_pct > 100.0) wk_pct = 100.0;
+  printf("  %-14s%-12s%s  %3.0f%%\n", "workouts", (workouts_done >= 4) ? "4 / 4" : (workouts_done == 3) ? "3 / 4" : (workouts_done == 2) ? "2 / 4" : (workouts_done == 1) ? "1 / 4" : "0 / 4", wk_bar, wk_pct);
+
+  // Print Avg Protein
+  char prot_bar[64];
+  render_progress_bar(prot_bar, sizeof(prot_bar), avg_protein, 200.0, 8);
+  double prot_pct = avg_protein / 200.0 * 100.0;
+  if (prot_pct > 100.0) prot_pct = 100.0;
+  char prot_ratio[32];
+  snprintf(prot_ratio, sizeof(prot_ratio), "%.0f / 200g", avg_protein);
+  double prot_diff = avg_protein - 200.0;
+  char prot_diff_str[32] = "";
+  if (prot_diff < 0.0) {
+    snprintf(prot_diff_str, sizeof(prot_diff_str), NEGATIVE "%.0fg/day" RESET, prot_diff);
+  } else if (prot_diff > 0.0) {
+    snprintf(prot_diff_str, sizeof(prot_diff_str), POSITIVE "+%.0fg/day" RESET, prot_diff);
+  } else {
+    strcpy(prot_diff_str, "0g/day");
+  }
+  printf("  %-14s%-12s%s  %3.0f%%  %s\n", "avg protein", prot_ratio, prot_bar, prot_pct, prot_diff_str);
+
+  // Print Avg Sleep
+  char sleep_bar[64];
+  render_progress_bar(sleep_bar, sizeof(sleep_bar), avg_sleep, 7.5, 8);
+  double sl_pct = avg_sleep / 7.5 * 100.0;
+  if (sl_pct > 100.0) sl_pct = 100.0;
+  char sleep_ratio[32];
+  snprintf(sleep_ratio, sizeof(sleep_ratio), "%.1f / 7.5h", avg_sleep);
+  printf("  %-14s%-12s%s  %3.0f%%\n", "avg sleep", sleep_ratio, sleep_bar, sl_pct);
+
+  // Print Bodyweight
+  if (weight_old > 0.0 && weight_new > 0.0) {
+    double diff = weight_new - weight_old;
+    char bw_ratio[64];
+    snprintf(bw_ratio, sizeof(bw_ratio), "%.1f → %.1fkg", weight_old, weight_new);
+    if (diff < 0.0) {
+      printf("  %-14s%-22s" POSITIVE "%.1fkg" RESET "\n", "bodyweight", bw_ratio, diff);
+    } else if (diff > 0.0) {
+      printf("  %-14s%-22s" NEGATIVE "+%.1fkg" RESET "\n", "bodyweight", bw_ratio, diff);
+    } else {
+      printf("  %-14s%-22s" DIM "0.0kg" RESET "\n", "bodyweight", bw_ratio);
+    }
+  } else {
+    printf("  %-14s" DIM "—" RESET "\n", "bodyweight");
+  }
+
+  printf("\n  " ACCENT "prs this week" RESET "\n");
+  int pr_count = 0;
+  sqlite3_stmt *stmt_prs;
+  const char *sql_prs = "SELECT exercise, weight_kg, reps FROM personal_records WHERE achieved_at >= datetime('now', '-7 days', 'localtime') ORDER BY achieved_at DESC;";
+  if (sqlite3_prepare_v2(db, sql_prs, -1, &stmt_prs, NULL) == SQLITE_OK) {
+    while (sqlite3_step(stmt_prs) == SQLITE_ROW) {
+      const char *ex = (const char *)sqlite3_column_text(stmt_prs, 0);
+      double wt = sqlite3_column_double(stmt_prs, 1);
+      int reps = sqlite3_column_int(stmt_prs, 2);
+
+      double prev_max = get_prev_max_weight(db, ex);
+      double delta = wt - prev_max;
+
+      printf("  %-18s%.1fkg × %d", ex, wt, reps);
+      if (prev_max > 0.0 && delta > 0.0) {
+        printf("  (" POSITIVE "+%.1fkg" RESET ")\n", delta);
+      } else {
+        printf("  (" POSITIVE "new" RESET ")\n");
+      }
+      pr_count++;
+    }
+    sqlite3_finalize(stmt_prs);
+  }
+  if (pr_count == 0) {
+    printf("  " DIM "no new prs this week. keep pushing!" RESET "\n");
+  }
+
+  printf("\n");
+  if (workouts_done >= 4 && avg_protein >= 200.0 && avg_sleep >= 7.5) {
+    printf(POSITIVE "  ❯ solid week. all markers optimized. keep executing!" RESET "\n");
+  } else if (workouts_done < 4) {
+    printf(WARNING "  ❯ missed workouts target this week (%d/4) — focus on consistency and schedule blocking." RESET "\n", workouts_done);
+  } else if (avg_protein < 190.0) {
+    double deficit = 200.0 - avg_protein;
+    printf(WARNING "  ❯ solid week. protein slightly under — add one meal or shake (-%.0fg/day)." RESET "\n", deficit);
+  } else if (avg_sleep < 7.0) {
+    printf(WARNING "  ❯ sleep compromised this week (avg %.1fh) — prioritize sleep hygiene to protect recovery." RESET "\n", avg_sleep);
+  } else {
+    printf(POSITIVE "  ❯ solid week. keep training hard and staying consistent!" RESET "\n");
+  }
+
+  print_separator();
+}

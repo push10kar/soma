@@ -14,6 +14,7 @@ static void print_help(void) {
     printf(ACCENT "  ▸ display commands" RESET "\n");
     printf("    %-32s%s\n", "soma [today]", "Unified Daily Briefing - compact logo, today's status badges, sleep/weight logged indicator, daily recommendation.");
     printf("    %-32s%s\n", "soma status", "Full Health Ledger - long-form layout containing all dashboard grids for an end-of-week review.");
+    printf("    %-32s%s\n", "soma weekly", "Sunday Weekly Review - weekly targets, averages, PR tracking, and coaching verdict.");
     printf("    %-32s%s\n", "soma physique", "Physique Analytics - multi-week bodyweight and waist sparklines, weekly velocity averages, and progression metrics.");
     printf("    %-32s%s\n", "soma recovery", "Recovery Analytics - daily sleep hour logs, weekly sleep averages, and CNS readiness scoring.");
     printf("    %-32s%s\n", "soma nutrition", "Nutritional Progress - dynamic progress bars showing current macros logged today vs. total goals.");
@@ -188,6 +189,12 @@ int main(int argc, char *argv[]) {
     
     if (strcmp(argv[1], "status") == 0) {
         print_full_status(db);
+        db_close(db);
+        return 0;
+    }
+    
+    if (strcmp(argv[1], "weekly") == 0) {
+        print_weekly_review(db);
         db_close(db);
         return 0;
     }

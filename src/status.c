@@ -773,3 +773,139 @@ void print_weekly_review(sqlite3 *db) {
 
   print_separator();
 }
+
+static bool has_log_for_date(sqlite3 *db, const char *table, const char *date_str) {
+  char sql[256];
+  snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE date(logged_at) = date(?);", table);
+  sqlite3_stmt *stmt;
+  bool has_log = false;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, date_str, -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      has_log = (sqlite3_column_int(stmt, 0) > 0);
+    }
+    sqlite3_finalize(stmt);
+  }
+  return has_log;
+}
+
+static void get_date_with_offset(sqlite3 *db, int offset, char *out_date, size_t max_len) {
+  sqlite3_stmt *stmt;
+  char sql[128];
+  snprintf(sql, sizeof(sql), "SELECT date('now', 'localtime', '-%d days');", offset);
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      const char *d = (const char *)sqlite3_column_text(stmt, 0);
+      if (d) {
+        snprintf(out_date, max_len, "%s", d);
+      }
+    }
+    sqlite3_finalize(stmt);
+  }
+}
+
+static int calculate_streak(sqlite3 *db, const char *table) {
+  char date_str[32];
+
+  get_date_with_offset(db, 0, date_str, sizeof(date_str));
+  bool logged_today = has_log_for_date(db, table, date_str);
+
+  get_date_with_offset(db, 1, date_str, sizeof(date_str));
+  bool logged_yesterday = has_log_for_date(db, table, date_str);
+
+  if (!logged_today && !logged_yesterday) {
+    return 0;
+  }
+
+  int start_offset = logged_today ? 0 : 1;
+  int streak = 0;
+  while (1) {
+    get_date_with_offset(db, start_offset + streak, date_str, sizeof(date_str));
+    if (has_log_for_date(db, table, date_str)) {
+      streak++;
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
+static bool has_all_four_logs_for_date(sqlite3 *db, const char *date_str) {
+  return has_log_for_date(db, "workouts", date_str) &&
+         has_log_for_date(db, "sleep_log", date_str) &&
+         has_log_for_date(db, "nutrition_log", date_str) &&
+         has_log_for_date(db, "bodyweight", date_str);
+}
+
+static int calculate_overall_streak(sqlite3 *db) {
+  char date_str[32];
+
+  get_date_with_offset(db, 0, date_str, sizeof(date_str));
+  bool logged_today = has_all_four_logs_for_date(db, date_str);
+
+  get_date_with_offset(db, 1, date_str, sizeof(date_str));
+  bool logged_yesterday = has_all_four_logs_for_date(db, date_str);
+
+  if (!logged_today && !logged_yesterday) {
+    return 0;
+  }
+
+  int start_offset = logged_today ? 0 : 1;
+  int streak = 0;
+  while (1) {
+    get_date_with_offset(db, start_offset + streak, date_str, sizeof(date_str));
+    if (has_all_four_logs_for_date(db, date_str)) {
+      streak++;
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
+static void render_streak_bar(char *out_bar, size_t max_len, int streak) {
+  char *p = out_bar;
+  int limit = streak > 25 ? 25 : streak;
+  for (int i = 0; i < limit && (p - out_bar) < (int)max_len - 4; i++) {
+    strcpy(p, "█");
+    p += 3;
+  }
+  *p = '\0';
+}
+
+void print_streak_dashboard(sqlite3 *db) {
+  print_logo();
+  print_separator();
+
+  int workout_streak = calculate_streak(db, "workouts");
+  int sleep_streak = calculate_streak(db, "sleep_log");
+  int nutrition_streak = calculate_streak(db, "nutrition_log");
+  int weight_streak = calculate_streak(db, "bodyweight");
+  int overall_streak = calculate_overall_streak(db);
+
+  char bar[128];
+  char streak_str[32];
+
+  render_streak_bar(bar, sizeof(bar), workout_streak);
+  snprintf(streak_str, sizeof(streak_str), "%d day%s", workout_streak, workout_streak == 1 ? "" : "s");
+  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "workout", streak_str, bar);
+
+  render_streak_bar(bar, sizeof(bar), sleep_streak);
+  snprintf(streak_str, sizeof(streak_str), "%d day%s", sleep_streak, sleep_streak == 1 ? "" : "s");
+  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "sleep log", streak_str, bar);
+
+  render_streak_bar(bar, sizeof(bar), nutrition_streak);
+  snprintf(streak_str, sizeof(streak_str), "%d day%s", nutrition_streak, nutrition_streak == 1 ? "" : "s");
+  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "nutrition", streak_str, bar);
+
+  render_streak_bar(bar, sizeof(bar), weight_streak);
+  snprintf(streak_str, sizeof(streak_str), "%d day%s", weight_streak, weight_streak == 1 ? "" : "s");
+  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "bodyweight", streak_str, bar);
+
+  printf("\n");
+
+  snprintf(streak_str, sizeof(streak_str), "%d day%s", overall_streak, overall_streak == 1 ? "" : "s");
+  printf("  %-14s%-9s" DIM "—" RESET " all four logged\n", "overall", streak_str);
+
+  print_separator();
+}

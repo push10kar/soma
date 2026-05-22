@@ -29,4 +29,7 @@ void print_exercise_history(sqlite3 *db, const char *exercise);
 /* Renders the Sunday weekly review dashboard */
 void print_weekly_review(sqlite3 *db);
 
+/* Renders consecutive days tracking streaks and discipline metrics */
+void print_streak_dashboard(sqlite3 *db);
+
 #endif /* STATUS_H */

@@ -567,9 +567,12 @@ Workout* parse_workout_shorthand(int argc, char* argv[]) {
         if (expr_lower[i] == 'X') expr_lower[i] = 'x';
     }
 
-    if (sscanf(expr_lower, "%lfx%dx%d", &weight, &reps, &sets) != 3) {
+    int parsed = sscanf(expr_lower, "%lfx%dx%d", &weight, &reps, &sets);
+    if (parsed == 2) {
+        sets = 1;
+    } else if (parsed != 3) {
         w->error = WORKOUT_ERR_PARSE_FAILED;
-        w->error_msg = str_dup("Invalid shorthand expression format. Expected <weight>x<reps>x<sets> (e.g. 80x5x3)");
+        w->error_msg = str_dup("Invalid shorthand expression format. Expected <weight>x<reps> or <weight>x<reps>x<sets> (e.g. 80x5 or 80x5x3)");
         return w;
     }
 
@@ -617,4 +620,136 @@ Workout* parse_workout_shorthand(int argc, char* argv[]) {
     w->volume_kg = weight * reps * sets;
 
     return w;
+}
+
+void print_logged_workout_summary(sqlite3* db, Workout* w) {
+    if (!w || !db) return;
+
+    // Parse current logged workout
+    int cur_len = 0;
+    double* cur_w_arr = parse_double_array(w->weights, &cur_len);
+    int* cur_r_arr = parse_int_array(w->reps, &cur_len);
+
+    if (!cur_w_arr || !cur_r_arr || cur_len == 0) {
+        if (cur_w_arr) free(cur_w_arr);
+        if (cur_r_arr) free(cur_r_arr);
+        return;
+    }
+
+    double first_w = cur_w_arr[0];
+    int first_r = cur_r_arr[0];
+    free(cur_w_arr);
+    free(cur_r_arr);
+
+    // Format current logged sets
+    char logged_str[64];
+    char first_w_str[16];
+    if (first_w == (int)first_w) snprintf(first_w_str, sizeof(first_w_str), "%.0fkg", first_w);
+    else snprintf(first_w_str, sizeof(first_w_str), "%.1fkg", first_w);
+
+    if (w->num_sets == 1) {
+        snprintf(logged_str, sizeof(logged_str), "%s × %d", first_w_str, first_r);
+    } else {
+        snprintf(logged_str, sizeof(logged_str), "%s × %d (%d sets)", first_w_str, first_r, w->num_sets);
+    }
+
+    // Query for previous session
+    double prev_w_val = -1.0;
+    int prev_r_val = -1;
+    bool has_prev = false;
+
+    // We query the most recent workout before the one we just inserted.
+    const char* sql_prev = 
+        "SELECT weight_kg, reps FROM workouts "
+        "WHERE LOWER(exercise) = LOWER(?) AND id < (SELECT MAX(id) FROM workouts WHERE LOWER(exercise) = LOWER(?)) "
+        "ORDER BY id DESC LIMIT 1;";
+
+    sqlite3_stmt* stmt_prev;
+    if (sqlite3_prepare_v2(db, sql_prev, -1, &stmt_prev, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt_prev, 1, w->exercise, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt_prev, 2, w->exercise, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt_prev) == SQLITE_ROW) {
+            const char* prev_weights = (const char*)sqlite3_column_text(stmt_prev, 0);
+            const char* prev_reps = (const char*)sqlite3_column_text(stmt_prev, 1);
+            if (prev_weights && prev_reps) {
+                int pw_len = 0, pr_len = 0;
+                double* pw_arr = parse_double_array(prev_weights, &pw_len);
+                int* pr_arr = parse_int_array(prev_reps, &pr_len);
+                if (pw_arr && pr_arr && pw_len > 0 && pr_len > 0) {
+                    prev_w_val = pw_arr[0];
+                    prev_r_val = pr_arr[0];
+                    has_prev = true;
+                }
+                if (pw_arr) free(pw_arr);
+                if (pr_arr) free(pr_arr);
+            }
+        }
+        sqlite3_finalize(stmt_prev);
+    }
+
+    // Print top details
+    printf("\n  " ACCENT BOLD "%s" RESET "\n", w->exercise);
+    printf("  " DIM "────────────────────────────────" RESET "\n");
+    printf("  %-12s%s\n", "logged", logged_str);
+
+    if (has_prev) {
+        double diff = first_w - prev_w_val;
+        char prev_w_str[16];
+        if (prev_w_val == (int)prev_w_val) snprintf(prev_w_str, sizeof(prev_w_str), "%.0fkg", prev_w_val);
+        else snprintf(prev_w_str, sizeof(prev_w_str), "%.1fkg", prev_w_val);
+
+        char diff_str[32] = "";
+        if (diff > 0.0) {
+            if (diff == (int)diff) snprintf(diff_str, sizeof(diff_str), POSITIVE "  +%.0fkg" RESET, diff);
+            else snprintf(diff_str, sizeof(diff_str), POSITIVE "  +%.1fkg" RESET, diff);
+        } else if (diff < 0.0) {
+            double abs_diff = -diff;
+            if (abs_diff == (int)abs_diff) snprintf(diff_str, sizeof(diff_str), NEGATIVE "  -%.0fkg" RESET, abs_diff);
+            else snprintf(diff_str, sizeof(diff_str), NEGATIVE "  -%.1fkg" RESET, abs_diff);
+        }
+
+        printf("  %-12s%s × %d%s\n", "last", prev_w_str, prev_r_val, diff_str);
+    } else {
+        printf("  %-12s—\n", "last");
+    }
+
+    double est_1rm = first_w * (1.0 + first_r / 30.0);
+    char est_str[16];
+    if (est_1rm == (int)est_1rm) snprintf(est_str, sizeof(est_str), "%.0fkg", est_1rm);
+    else snprintf(est_str, sizeof(est_str), "%.1fkg", est_1rm);
+    printf("  %-12s%s\n", "est. 1rm", est_str);
+
+    // Conflict warnings
+    if (is_split_configured(db)) {
+        ActiveSplitDay active = get_active_split_day(db);
+        if (!active.is_rest_day) {
+            if (!is_exercise_in_split_day(db, active.id, w->exercise)) {
+                // Find what day this exercise actually belongs to
+                char target_day_name[64] = "";
+                const char* sql_target = 
+                    "SELECT name FROM split_days WHERE id = ("
+                    "  SELECT split_day_id FROM split_exercises WHERE LOWER(exercise) = LOWER(?) LIMIT 1"
+                    ");";
+                
+                sqlite3_stmt* stmt_t;
+                if (sqlite3_prepare_v2(db, sql_target, -1, &stmt_t, NULL) == SQLITE_OK) {
+                    sqlite3_bind_text(stmt_t, 1, w->exercise, -1, SQLITE_STATIC);
+                    if (sqlite3_step(stmt_t) == SQLITE_ROW) {
+                        const char* t_name = (const char*)sqlite3_column_text(stmt_t, 0);
+                        if (t_name) {
+                            strncpy(target_day_name, t_name, sizeof(target_day_name));
+                            target_day_name[sizeof(target_day_name) - 1] = '\0';
+                        }
+                    }
+                    sqlite3_finalize(stmt_t);
+                }
+
+                if (strlen(target_day_name) > 0) {
+                    printf("\n  " NEGATIVE "[warn]" RESET " %s is a %s exercise\n", w->exercise, target_day_name);
+                    printf("         today is %s day\n", active.name);
+                }
+            }
+        }
+    }
+    printf("\n");
 }

@@ -91,6 +91,11 @@ double calculate_volume(const char* weights, const char* reps);
 double get_max_weight(const char* weights);
 
 /**
+ * Print the summary of a successfully logged workout, including split conflicts
+ */
+void print_logged_workout_summary(sqlite3* db, Workout* w);
+
+/**
  * Free all allocated memory for a workout struct
  */
 void free_workout(Workout* w);

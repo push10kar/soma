@@ -182,14 +182,15 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         
-        printf(POSITIVE "✓ " RESET "Logged " ACCENT BOLD "%s" RESET ": %d sets, " 
-               ACCENT "%.0f kg-reps" RESET "\n", 
-               w->exercise, w->num_sets, w->volume_kg);
+        sqlite3 *db = db_open();
+        if (db) {
+            print_logged_workout_summary(db, w);
+            db_close(db);
+        }
         
         if (w->is_new_pr) {
             double max_weight = get_max_weight(w->weights);
             if (max_weight > 0) {
-                printf("\n");
                 print_pr_badge(w->exercise, max_weight);
             }
         }

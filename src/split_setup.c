@@ -305,10 +305,46 @@ void print_split_summary(sqlite3 *db) {
         sqlite3_finalize(stmt_cfg);
     }
 
-    printf("  " ACCENT BOLD "Your training split" RESET "  ·  schedule: " BOLD "%s" RESET "\n\n", split_type);
+    int total_days = 0;
+    const char *sql_count = "SELECT COUNT(*) FROM split_days;";
+    if (sqlite3_prepare_v2(db, sql_count, -1, &stmt_cfg, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt_cfg) == SQLITE_ROW) {
+            total_days = sqlite3_column_int(stmt_cfg, 0);
+        }
+        sqlite3_finalize(stmt_cfg);
+    }
 
-    const char *weekday_names[] = {
-        "", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+    int pos = 0;
+    if (strcmp(split_type, "rotate") == 0) {
+        const char *sql_pos = "SELECT value FROM config WHERE key = 'split_rotation_pos';";
+        if (sqlite3_prepare_v2(db, sql_pos, -1, &stmt_cfg, NULL) == SQLITE_OK) {
+            if (sqlite3_step(stmt_cfg) == SQLITE_ROW) {
+                const char *val = (const char *)sqlite3_column_text(stmt_cfg, 0);
+                if (val) pos = atoi(val);
+            }
+            sqlite3_finalize(stmt_cfg);
+        }
+    }
+
+    int user_wd = 1;
+    if (strcmp(split_type, "fixed") == 0) {
+        sqlite3_stmt *stmt_wd;
+        int sqlite_wd = 1;
+        if (sqlite3_prepare_v2(db, "SELECT strftime('%w', 'now', 'localtime');", -1, &stmt_wd, NULL) == SQLITE_OK) {
+            if (sqlite3_step(stmt_wd) == SQLITE_ROW) {
+                const char *val = (const char *)sqlite3_column_text(stmt_wd, 0);
+                if (val) sqlite_wd = atoi(val);
+            }
+            sqlite3_finalize(stmt_wd);
+        }
+        user_wd = (sqlite_wd == 0) ? 7 : sqlite_wd;
+    }
+
+    printf("  " ACCENT BOLD "your split" RESET "  ·  " BOLD "%d day %s" RESET "\n\n", total_days, split_type);
+
+    const char *months_names[] = {
+        "jan", "feb", "mar", "apr", "may", "jun",
+        "jul", "aug", "sep", "oct", "nov", "dec"
     };
 
     sqlite3_stmt *stmt_day;
@@ -319,34 +355,126 @@ void print_split_summary(sqlite3 *db) {
             const char *name = (const char *)sqlite3_column_text(stmt_day, 1);
             int weekday = sqlite3_column_type(stmt_day, 2) == SQLITE_NULL ? -1 : sqlite3_column_int(stmt_day, 2);
 
-            // Fetch exercises
-            sqlite3_stmt *stmt_ex;
-            const char *sql_ex = "SELECT exercise FROM split_exercises WHERE split_day_id = ? ORDER BY id ASC;";
-            char ex_list[512] = "";
-            if (sqlite3_prepare_v2(db, sql_ex, -1, &stmt_ex, NULL) == SQLITE_OK) {
-                sqlite3_bind_int(stmt_ex, 1, d_id);
-                int idx = 0;
-                while (sqlite3_step(stmt_ex) == SQLITE_ROW) {
-                    const char *ex = (const char *)sqlite3_column_text(stmt_ex, 0);
-                    if (idx > 0) strcat(ex_list, ", ");
-                    strcat(ex_list, ex);
-                    idx++;
+            // Fetch last trained date
+            char last_str[64] = "never";
+            sqlite3_stmt *stmt_last;
+            const char *sql_last = 
+                "SELECT max(logged_at) FROM workouts "
+                "WHERE LOWER(exercise) IN ( "
+                "    SELECT LOWER(exercise) FROM split_exercises WHERE split_day_id = ? "
+                ");";
+            if (sqlite3_prepare_v2(db, sql_last, -1, &stmt_last, NULL) == SQLITE_OK) {
+                sqlite3_bind_int(stmt_last, 1, d_id);
+                if (sqlite3_step(stmt_last) == SQLITE_ROW) {
+                    const char *max_date = (const char *)sqlite3_column_text(stmt_last, 0);
+                    if (max_date) {
+                        // Calculate days diff
+                        int days_diff = -1;
+                        sqlite3_stmt *stmt_diff;
+                        const char *sql_diff = "SELECT CAST(julianday('now', 'localtime') - julianday(?) AS INTEGER);";
+                        if (sqlite3_prepare_v2(db, sql_diff, -1, &stmt_diff, NULL) == SQLITE_OK) {
+                            sqlite3_bind_text(stmt_diff, 1, max_date, -1, SQLITE_STATIC);
+                            if (sqlite3_step(stmt_diff) == SQLITE_ROW) {
+                                days_diff = sqlite3_column_int(stmt_diff, 0);
+                            }
+                            sqlite3_finalize(stmt_diff);
+                        }
+
+                        if (days_diff == 0) {
+                            strcpy(last_str, "today");
+                        } else if (days_diff == 1) {
+                            strcpy(last_str, "yesterday");
+                        } else {
+                            // Extract month/day
+                            sqlite3_stmt *stmt_fmt;
+                            if (sqlite3_prepare_v2(db, "SELECT strftime('%m-%d', ?);", -1, &stmt_fmt, NULL) == SQLITE_OK) {
+                                sqlite3_bind_text(stmt_fmt, 1, max_date, -1, SQLITE_STATIC);
+                                if (sqlite3_step(stmt_fmt) == SQLITE_ROW) {
+                                    const char *md = (const char *)sqlite3_column_text(stmt_fmt, 0);
+                                    if (md) {
+                                        int m = 0, d = 0;
+                                        if (sscanf(md, "%d-%d", &m, &d) == 2) {
+                                            snprintf(last_str, sizeof(last_str), "%s %d", months_names[m - 1], d);
+                                        }
+                                    }
+                                }
+                                sqlite3_finalize(stmt_fmt);
+                            }
+                        }
+                    }
                 }
-                sqlite3_finalize(stmt_ex);
+                sqlite3_finalize(stmt_last);
             }
 
-            if (strlen(ex_list) == 0) {
-                strcpy(ex_list, "rest / active recovery");
-            }
-
+            // Calculate next due date
+            int diff = 0;
             if (strcmp(split_type, "rotate") == 0) {
-                printf("  Day %d  %-10s  %s\n", d_id + 1, name, ex_list);
+                diff = (d_id - pos + total_days) % total_days;
             } else {
-                const char *wd_name = (weekday >= 1 && weekday <= 7) ? weekday_names[weekday] : "rest";
-                printf("  Day %d  %-10s  %-10s  %s\n", d_id + 1, name, wd_name, ex_list);
+                diff = (weekday - user_wd + 7) % 7;
             }
+
+            char next_str[64] = "today";
+            if (diff == 0) {
+                strcpy(next_str, "today");
+            } else if (diff == 1) {
+                strcpy(next_str, "tomorrow");
+            } else {
+                sqlite3_stmt *stmt_next;
+                const char *sql_next = "SELECT strftime('%m-%d', 'now', 'localtime', '+' || ? || ' days');";
+                if (sqlite3_prepare_v2(db, sql_next, -1, &stmt_next, NULL) == SQLITE_OK) {
+                    sqlite3_bind_int(stmt_next, 1, diff);
+                    if (sqlite3_step(stmt_next) == SQLITE_ROW) {
+                        const char *md = (const char *)sqlite3_column_text(stmt_next, 0);
+                        if (md) {
+                            int m = 0, d = 0;
+                            if (sscanf(md, "%d-%d", &m, &d) == 2) {
+                                snprintf(next_str, sizeof(next_str), "%s %d", months_names[m - 1], d);
+                            }
+                        }
+                    }
+                    sqlite3_finalize(stmt_next);
+                }
+            }
+
+            // Print beautifully
+            char last_padded[64];
+            snprintf(last_padded, sizeof(last_padded), "%-10s", last_str);
+
+            char last_display[128];
+            if (strcmp(last_str, "never") == 0) {
+                snprintf(last_display, sizeof(last_display), DIM "%s" RESET, last_padded);
+            } else if (strcmp(last_str, "today") == 0 || strcmp(last_str, "yesterday") == 0) {
+                snprintf(last_display, sizeof(last_display), ACCENT "%s" RESET, last_padded);
+            } else {
+                snprintf(last_display, sizeof(last_display), "%s", last_padded);
+            }
+
+            char next_padded[64];
+            snprintf(next_padded, sizeof(next_padded), "%-10s", next_str);
+
+            char next_display[128];
+            if (strcmp(next_str, "today") == 0) {
+                snprintf(next_display, sizeof(next_display), POSITIVE "%s" RESET, next_padded);
+            } else {
+                snprintf(next_display, sizeof(next_display), "%s", next_padded);
+            }
+
+            printf("  day %-2d  %-8s  last %s  ·  next %s\n", 
+                   d_id + 1, name, last_display, next_display);
         }
         sqlite3_finalize(stmt_day);
+    }
+
+    printf("\n");
+
+    // Print active position
+    ActiveSplitDay active = get_active_split_day(db);
+    if (active.is_rest_day) {
+        printf("  %-12s" DIM "%s" RESET "\n", "position", "rest / active recovery");
+    } else {
+        printf("  %-12sday %d of %d  (%s today)\n", 
+               "position", active.id + 1, total_days, active.name);
     }
 
     print_separator();

@@ -6,6 +6,8 @@
 #include <sqlite3.h>
 #include "workout.h"
 #include "db.h"
+#include "split_setup.h"
+#include "utils.h"
 
 /* Helper: Duplicate a string */
 static char* str_dup(const char* str) {
@@ -412,6 +414,40 @@ bool log_workout(Workout* w) {
         return false;
     }
     
+    // Training Split Integration: Advancing and recovery warning checks
+    if (is_split_configured(db)) {
+        ActiveSplitDay active = get_active_split_day(db);
+        if (!active.is_rest_day) {
+            if (is_exercise_in_split_day(db, active.id, w->exercise)) {
+                int split_days_since = -1;
+                const char *sql_since = 
+                    "SELECT CAST(julianday('now', 'localtime') - julianday(max(logged_at)) AS INTEGER) "
+                    "FROM workouts "
+                    "WHERE logged_at < date('now', 'localtime') "
+                    "  AND LOWER(exercise) IN ( "
+                    "      SELECT LOWER(exercise) FROM split_exercises WHERE split_day_id = ? "
+                    "  );";
+                
+                sqlite3_stmt *stmt_since;
+                if (sqlite3_prepare_v2(db, sql_since, -1, &stmt_since, NULL) == SQLITE_OK) {
+                    sqlite3_bind_int(stmt_since, 1, active.id);
+                    if (sqlite3_step(stmt_since) == SQLITE_ROW) {
+                        if (sqlite3_column_type(stmt_since, 0) != SQLITE_NULL) {
+                            split_days_since = sqlite3_column_int(stmt_since, 0);
+                        }
+                    }
+                    sqlite3_finalize(stmt_since);
+                }
+
+                if (split_days_since == 1) {
+                    printf("\n" WARNING "⚠️  warning: training %s split back-to-back days! prioritize CNS recovery." RESET "\n\n", active.name);
+                }
+
+                advance_split_rotation_if_needed(db);
+            }
+        }
+    }
+
     fprintf(stderr, "DEBUG: Finalizing and closing\n");
     sqlite3_finalize(stmt);
     db_close(db);

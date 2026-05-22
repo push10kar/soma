@@ -6,6 +6,7 @@
 #include "workout.h"
 #include "suggest.h"
 #include "status.h"
+#include "split_setup.h"
 
 static void print_help(void) {
     printf("\n" ACCENT BOLD "  soma" RESET DIM "  ·  personal fitness ledger CLI" RESET "\n\n");
@@ -18,6 +19,7 @@ static void print_help(void) {
     printf("    %-32s%s\n", "soma streak", "Consistency Tracker - tracks logging streaks for workout, sleep, nutrition, bodyweight, and overall discipline.");
     printf("    %-32s%s\n", "soma prs", "Personal Records Board - lists all current personal records with weight, reps, estimated 1RM, and date.");
     printf("    %-32s%s\n", "soma physique", "Physique Analytics - multi-week bodyweight and waist sparklines, weekly velocity averages, and progression metrics.");
+    printf("    %-32s%s\n", "soma split [setup]", "Split Setup - configure or view your training split and schedule.");
     printf("    %-32s%s\n", "soma recovery", "Recovery Analytics - daily sleep hour logs, weekly sleep averages, and CNS readiness scoring.");
     printf("    %-32s%s\n", "soma nutrition", "Nutritional Progress - dynamic progress bars showing current macros logged today vs. total goals.");
     printf("    %-32s%s\n", "soma suggest [exercise]", "Coaching Target - dynamic 30d progression target breakdown.");
@@ -201,6 +203,31 @@ int main(int argc, char *argv[]) {
     
     /* Seed the database if it is empty to ensure a beautiful initial experience */
     db_seed(db);
+
+    /* Manual route: soma split setup / soma split */
+    if (argc >= 2 && strcmp(argv[1], "split") == 0) {
+        if (argc >= 3 && strcmp(argv[2], "setup") == 0) {
+            run_split_setup_wizard(db);
+            db_close(db);
+            return 0;
+        } else {
+            if (is_split_configured(db)) {
+                print_split_summary(db);
+            } else {
+                printf("\n" WARNING "  No training split is configured yet." RESET "\n");
+                printf("  To set up your training split, run: " BOLD "soma split setup" RESET "\n\n");
+            }
+            db_close(db);
+            return 0;
+        }
+    }
+
+    /* Auto-trigger on first-run if split is not configured */
+    if (!is_split_configured(db)) {
+        run_split_setup_wizard(db);
+        db_close(db);
+        return 0;
+    }
 
     if (argc == 1 || strcmp(argv[1], "today") == 0) {
         print_today_briefing(db);

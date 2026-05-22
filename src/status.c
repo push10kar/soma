@@ -1,7 +1,9 @@
+#define _DEFAULT_SOURCE
 #include "status.h"
 #include "db.h"
 #include "utils.h"
 #include "workout.h"
+#include "split_setup.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,16 +81,99 @@ void print_today_briefing(sqlite3 *db) {
 
   print_today_header(days_since, last_day, sleep_hrs, sleep_logged, weight_logged);
 
-  /* Suggest next training target dynamically based on the last workout logged */
-  printf(ACCENT "  ❯ " RESET BOLD WHITE);
-  if (contains_string(last_day, "bench") || contains_string(last_day, "press")) {
-    printf("legs day — attempt squat 122.5kg × 5 today");
-  } else if (contains_string(last_day, "squat")) {
-    printf("pull day — focus on back density and deadlifts today");
+  if (is_split_configured(db)) {
+      ActiveSplitDay active = get_active_split_day(db);
+      printf(ACCENT "  ❯ " RESET BOLD WHITE);
+      if (active.is_rest_day) {
+          printf("rest / active recovery day today · prioritize sleep & mobility");
+      } else {
+          int split_days_since = -1;
+          const char *sql_since = 
+              "SELECT CAST(julianday('now', 'localtime') - julianday(max(logged_at)) AS INTEGER) "
+              "FROM workouts "
+              "WHERE LOWER(exercise) IN ( "
+              "    SELECT LOWER(exercise) FROM split_exercises WHERE split_day_id = ? "
+              ");";
+          
+          sqlite3_stmt *stmt_since;
+          if (sqlite3_prepare_v2(db, sql_since, -1, &stmt_since, NULL) == SQLITE_OK) {
+              sqlite3_bind_int(stmt_since, 1, active.id);
+              if (sqlite3_step(stmt_since) == SQLITE_ROW) {
+                  if (sqlite3_column_type(stmt_since, 0) != SQLITE_NULL) {
+                      split_days_since = sqlite3_column_int(stmt_since, 0);
+                  }
+              }
+              sqlite3_finalize(stmt_since);
+          }
+
+          char since_str[64] = "never trained";
+          if (split_days_since == 0) {
+              strcpy(since_str, "today");
+          } else if (split_days_since == 1) {
+              strcpy(since_str, "yesterday");
+          } else if (split_days_since > 1) {
+              snprintf(since_str, sizeof(since_str), "%d days ago", split_days_since);
+          }
+
+          char first_ex[64] = "";
+          const char *sql_ex = "SELECT exercise FROM split_exercises WHERE split_day_id = ? ORDER BY id ASC LIMIT 1;";
+          sqlite3_stmt *stmt_ex;
+          if (sqlite3_prepare_v2(db, sql_ex, -1, &stmt_ex, NULL) == SQLITE_OK) {
+              sqlite3_bind_int(stmt_ex, 1, active.id);
+              if (sqlite3_step(stmt_ex) == SQLITE_ROW) {
+                  const char *val = (const char *)sqlite3_column_text(stmt_ex, 0);
+                  if (val) strncpy(first_ex, val, sizeof(first_ex));
+              }
+              sqlite3_finalize(stmt_ex);
+          }
+
+          if (strlen(first_ex) > 0) {
+              double last_w = 0.0;
+              int last_r = 5;
+              const char *sql_last = "SELECT weight_kg, reps FROM workouts WHERE LOWER(exercise) = LOWER(?) ORDER BY logged_at DESC LIMIT 1;";
+              sqlite3_stmt *stmt_last;
+              if (sqlite3_prepare_v2(db, sql_last, -1, &stmt_last, NULL) == SQLITE_OK) {
+                  sqlite3_bind_text(stmt_last, 1, first_ex, -1, SQLITE_STATIC);
+                  if (sqlite3_step(stmt_last) == SQLITE_ROW) {
+                      const char *w_str = (const char *)sqlite3_column_text(stmt_last, 0);
+                      const char *r_str = (const char *)sqlite3_column_text(stmt_last, 1);
+                      if (w_str) {
+                          char *dup_w = strdup(w_str);
+                          char *tok = strtok(dup_w, ",");
+                          if (tok) last_w = atof(tok);
+                          free(dup_w);
+                      }
+                      if (r_str) {
+                          char *dup_r = strdup(r_str);
+                          char *tok = strtok(dup_r, ",");
+                          if (tok) last_r = atoi(tok);
+                          free(dup_r);
+                      }
+                  }
+                  sqlite3_finalize(stmt_last);
+              }
+
+              double target_w = (last_w > 0.0) ? (last_w + 2.5) : 80.0;
+              printf("%s day · last %s was %s · suggests: %s — attempt %.1fkg × %d today", 
+                     active.name, active.name, since_str, first_ex, target_w, last_r);
+          } else {
+              printf("%s day · last %s was %s · prioritize high intensity training today", 
+                     active.name, active.name, since_str);
+          }
+      }
+      printf(RESET "\n\n");
   } else {
-    printf("push day — attempt bench 82.5kg × 5 today");
+      /* Suggest next training target dynamically based on the last workout logged */
+      printf(ACCENT "  ❯ " RESET BOLD WHITE);
+      if (contains_string(last_day, "bench") || contains_string(last_day, "press")) {
+        printf("legs day — attempt squat 122.5kg × 5 today");
+      } else if (contains_string(last_day, "squat")) {
+        printf("pull day — focus on back density and deadlifts today");
+      } else {
+        printf("push day — attempt bench 82.5kg × 5 today");
+      }
+      printf(RESET "\n\n");
   }
-  printf(RESET "\n\n");
 
   print_separator();
 }
@@ -674,6 +759,43 @@ void print_weekly_review(sqlite3 *db) {
     }
   }
 
+  int split_days_count = 4;
+  int split_days_trained = 0;
+  
+  if (is_split_configured(db)) {
+      // Get actual split days count
+      sqlite3_stmt *stmt_cnt;
+      if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM split_days;", -1, &stmt_cnt, NULL) == SQLITE_OK) {
+          if (sqlite3_step(stmt_cnt) == SQLITE_ROW) {
+              split_days_count = sqlite3_column_int(stmt_cnt, 0);
+          }
+          sqlite3_finalize(stmt_cnt);
+      }
+      
+      // Calculate how many split days were trained
+      sqlite3_stmt *stmt_chk;
+      const char *sql_chk = 
+          "SELECT COUNT(*) FROM workouts "
+          "WHERE logged_at >= datetime('now', '-7 days', 'localtime') "
+          "  AND LOWER(exercise) IN ( "
+          "      SELECT LOWER(exercise) FROM split_exercises WHERE split_day_id = ? "
+          "  );";
+      
+      for (int d = 0; d < split_days_count; d++) {
+          if (sqlite3_prepare_v2(db, sql_chk, -1, &stmt_chk, NULL) == SQLITE_OK) {
+              sqlite3_bind_int(stmt_chk, 1, d);
+              if (sqlite3_step(stmt_chk) == SQLITE_ROW) {
+                  if (sqlite3_column_int(stmt_chk, 0) > 0) {
+                      split_days_trained++;
+                  }
+              }
+              sqlite3_finalize(stmt_chk);
+          }
+      }
+  } else {
+      split_days_trained = workouts_done;
+  }
+
   print_logo();
   print_separator();
 
@@ -681,11 +803,55 @@ void print_weekly_review(sqlite3 *db) {
   print_separator();
 
   // Print Workouts
-  char wk_bar[64];
-  render_progress_bar(wk_bar, sizeof(wk_bar), (double)workouts_done, 4.0, 8);
-  double wk_pct = (double)workouts_done / 4.0 * 100.0;
+  double target_wk = (double)split_days_count;
+  double wk_pct = (double)split_days_trained / target_wk * 100.0;
   if (wk_pct > 100.0) wk_pct = 100.0;
-  printf("  %-14s%-12s%s  %3.0f%%\n", "workouts", (workouts_done >= 4) ? "4 / 4" : (workouts_done == 3) ? "3 / 4" : (workouts_done == 2) ? "2 / 4" : (workouts_done == 1) ? "1 / 4" : "0 / 4", wk_bar, wk_pct);
+
+  char wk_bar[64];
+  render_progress_bar(wk_bar, sizeof(wk_bar), (double)split_days_trained, target_wk, 8);
+
+  char wk_ratio[32];
+  snprintf(wk_ratio, sizeof(wk_ratio), "%d / %d", split_days_trained, split_days_count);
+
+  printf("  %-14s%-12s%s  %3.0f%%\n", "workouts", wk_ratio, wk_bar, wk_pct);
+
+  // If split configured, print categorized breakdown
+  if (is_split_configured(db)) {
+      sqlite3_stmt *stmt_list;
+      const char *sql_list = "SELECT id, name FROM split_days ORDER BY id ASC;";
+      if (sqlite3_prepare_v2(db, sql_list, -1, &stmt_list, NULL) == SQLITE_OK) {
+          while (sqlite3_step(stmt_list) == SQLITE_ROW) {
+              int d_id = sqlite3_column_int(stmt_list, 0);
+              const char *d_name = (const char *)sqlite3_column_text(stmt_list, 1);
+              
+              int trained = 0;
+              sqlite3_stmt *stmt_chk2;
+              const char *sql_chk2 = 
+                  "SELECT COUNT(*) FROM workouts "
+                  "WHERE logged_at >= datetime('now', '-7 days', 'localtime') "
+                  "  AND LOWER(exercise) IN ( "
+                  "      SELECT LOWER(exercise) FROM split_exercises WHERE split_day_id = ? "
+                  "  );";
+              if (sqlite3_prepare_v2(db, sql_chk2, -1, &stmt_chk2, NULL) == SQLITE_OK) {
+                  sqlite3_bind_int(stmt_chk2, 1, d_id);
+                  if (sqlite3_step(stmt_chk2) == SQLITE_ROW) {
+                      if (sqlite3_column_int(stmt_chk2, 0) > 0) {
+                          trained = 1;
+                      }
+                  }
+                  sqlite3_finalize(stmt_chk2);
+              }
+              
+              if (trained) {
+                  printf("    " DIM "▸" RESET "  %-10s  " POSITIVE "1 / 1  ✓" RESET "\n", d_name);
+              } else {
+                  printf("    " DIM "▸" RESET "  %-10s  " NEGATIVE "0 / 1  ✗" RESET "\n", d_name);
+              }
+          }
+          sqlite3_finalize(stmt_list);
+      }
+      printf("\n");
+  }
 
   // Print Avg Protein
   char prot_bar[64];
@@ -695,7 +861,7 @@ void print_weekly_review(sqlite3 *db) {
   char prot_ratio[32];
   snprintf(prot_ratio, sizeof(prot_ratio), "%.0f / 200g", avg_protein);
   double prot_diff = avg_protein - 200.0;
-  char prot_diff_str[32] = "";
+  char prot_diff_str[64] = "";
   if (prot_diff < 0.0) {
     snprintf(prot_diff_str, sizeof(prot_diff_str), NEGATIVE "%.0fg/day" RESET, prot_diff);
   } else if (prot_diff > 0.0) {

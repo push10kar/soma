@@ -1,6 +1,8 @@
+#define _DEFAULT_SOURCE
 #include "suggest.h"
 #include "utils.h"
 #include "db.h"
+#include "split_setup.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -272,8 +274,100 @@ void print_suggestions(sqlite3 *db, const char *filter_exercise) {
   printf(DIM "  %-18s%-24s%-20s%s\n\n" RESET,
          "exercise", "30d 1rm progress", "target set", "coaching recommendation");
 
-  const char *exercises[] = {"bench press", "squat", "overhead press"};
-  int num_exercises = 3;
+  char **exercises = NULL;
+  int num_exercises = 0;
+  bool free_exercises = false;
+
+  ActiveSplitDay today_split = get_active_split_day(db);
+
+  // If a filter is explicitly provided and is NOT "all"
+  if (filter_exercise && strcasecmp(filter_exercise, "all") != 0) {
+      exercises = (char **)malloc(sizeof(char *));
+      if (exercises) {
+          exercises[0] = strdup(filter_exercise);
+          num_exercises = 1;
+          free_exercises = true;
+      }
+  } else {
+      bool is_all = (filter_exercise && strcasecmp(filter_exercise, "all") == 0);
+      
+      if (!is_all && is_split_configured(db)) {
+          if (today_split.is_rest_day) {
+              printf("  " ACCENT BOLD "Today is a Rest / Recovery Day!" RESET "\n");
+              printf(DIM "  Here are suggestions for your full split to help you plan ahead:" RESET "\n\n");
+              is_all = true; // Show all split exercises
+          } else {
+              printf("  " ACCENT BOLD "Today's Split: %s day" RESET "\n\n", today_split.name);
+          }
+      }
+
+      if (!is_all && is_split_configured(db) && !today_split.is_rest_day) {
+          sqlite3_stmt *stmt;
+          const char *sql = "SELECT exercise FROM split_exercises WHERE split_day_id = ? ORDER BY id ASC;";
+          if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+              sqlite3_bind_int(stmt, 1, today_split.id);
+              int cap = 4;
+              exercises = (char **)malloc(cap * sizeof(char *));
+              if (exercises) {
+                  while (sqlite3_step(stmt) == SQLITE_ROW) {
+                      const char *ex = (const char *)sqlite3_column_text(stmt, 0);
+                      if (ex) {
+                          if (num_exercises >= cap) {
+                              cap *= 2;
+                              exercises = (char **)realloc(exercises, cap * sizeof(char *));
+                          }
+                          if (exercises) {
+                              exercises[num_exercises++] = strdup(ex);
+                          }
+                      }
+                  }
+                  free_exercises = true;
+              }
+              sqlite3_finalize(stmt);
+          }
+      }
+      
+      // Fallback/all split exercises
+      if (num_exercises == 0) {
+          if (is_split_configured(db)) {
+              sqlite3_stmt *stmt;
+              const char *sql = "SELECT DISTINCT exercise FROM split_exercises;";
+              if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+                  int cap = 8;
+                  exercises = (char **)malloc(cap * sizeof(char *));
+                  if (exercises) {
+                      while (sqlite3_step(stmt) == SQLITE_ROW) {
+                          const char *ex = (const char *)sqlite3_column_text(stmt, 0);
+                          if (ex) {
+                              if (num_exercises >= cap) {
+                                  cap *= 2;
+                                  exercises = (char **)realloc(exercises, cap * sizeof(char *));
+                              }
+                              if (exercises) {
+                                  exercises[num_exercises++] = strdup(ex);
+                              }
+                          }
+                      }
+                      free_exercises = true;
+                  }
+                  sqlite3_finalize(stmt);
+              }
+          }
+          
+          // Absolute default fallback
+          if (num_exercises == 0) {
+              static const char *defaults[] = {"bench press", "squat", "overhead press"};
+              exercises = (char **)malloc(3 * sizeof(char *));
+              if (exercises) {
+                  for (int i = 0; i < 3; i++) {
+                      exercises[i] = strdup(defaults[i]);
+                  }
+                  num_exercises = 3;
+                  free_exercises = true;
+              }
+          }
+      }
+  }
 
   // Interrogate recovery telemetry (7-day sleep averages)
   double sleep_avg = db_get_sleep_7d_avg(db);
@@ -281,7 +375,7 @@ void print_suggestions(sqlite3 *db, const char *filter_exercise) {
 
   for (int i = 0; i < num_exercises; i++) {
     const char *ex = exercises[i];
-    if (filter_exercise && !exercise_matches(ex, filter_exercise)) {
+    if (filter_exercise && strcasecmp(filter_exercise, "all") != 0 && !exercise_matches(ex, filter_exercise)) {
       continue;
     }
 
@@ -395,6 +489,13 @@ void print_suggestions(sqlite3 *db, const char *filter_exercise) {
       printf("  %-18s" DIM "%-24s%-20s%s" RESET "\n\n",
              ex, "no history", "—", "log workouts to generate recommendations");
     }
+  }
+
+  if (free_exercises && exercises) {
+      for (int i = 0; i < num_exercises; i++) {
+          if (exercises[i]) free(exercises[i]);
+      }
+      free(exercises);
   }
 
   print_separator();

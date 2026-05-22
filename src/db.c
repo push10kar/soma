@@ -95,6 +95,24 @@ void db_init(sqlite3 *db) {
       "  carbs_g     REAL    NOT NULL,"
       "  fat_g       REAL    NOT NULL,"
       "  calories    INTEGER NOT NULL"
+      ");"
+
+      "CREATE TABLE IF NOT EXISTS config ("
+      "  key   TEXT PRIMARY KEY,"
+      "  value TEXT"
+      ");"
+
+      "CREATE TABLE IF NOT EXISTS split_days ("
+      "  id          INTEGER PRIMARY KEY,"
+      "  name        TEXT    NOT NULL,"
+      "  weekday     INTEGER"
+      ");"
+
+      "CREATE TABLE IF NOT EXISTS split_exercises ("
+      "  id           INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "  split_day_id INTEGER NOT NULL,"
+      "  exercise     TEXT    NOT NULL,"
+      "  FOREIGN KEY(split_day_id) REFERENCES split_days(id) ON DELETE CASCADE"
       ");";
 
   char *err = NULL;

@@ -1,10 +1,16 @@
-# soma
+<p align="center">
+  <img src="assets/mascot.png" width="250" alt="soma mascot" />
+</p>
 
-![C](https://img.shields.io/badge/language-C-555?style=flat-square&logo=c&logoColor=white&labelColor=111)
-![SQLite](https://img.shields.io/badge/database-SQLite-555?style=flat-square&logo=sqlite&logoColor=white&labelColor=111)
-![Linux](https://img.shields.io/badge/platform-Linux-555?style=flat-square&logo=linux&logoColor=white&labelColor=111)
-![License](https://img.shields.io/badge/license-MIT-555?style=flat-square&labelColor=111)
-![Status](https://img.shields.io/badge/status-actively%20used-b8ff00?style=flat-square&labelColor=111&color=b8ff00)
+<h1 align="center">soma</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/language-C-555?style=flat-square&logo=c&logoColor=white&labelColor=111" alt="C" />
+  <img src="https://img.shields.io/badge/database-SQLite-555?style=flat-square&logo=sqlite&logoColor=white&labelColor=111" alt="SQLite" />
+  <img src="https://img.shields.io/badge/platform-Linux-555?style=flat-square&logo=linux&logoColor=white&labelColor=111" alt="Linux" />
+  <img src="https://img.shields.io/badge/license-MIT-555?style=flat-square&labelColor=111" alt="License" />
+  <img src="https://img.shields.io/badge/status-actively%20used-b8ff00?style=flat-square&labelColor=111&color=b8ff00" alt="Status" />
+</p>
 
 **a terminal fitness tracker that doesn't try to be your friend.**
 

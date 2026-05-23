@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _MSC_VER
 #define strcasecmp _stricmp
@@ -1029,14 +1030,188 @@ static int calculate_overall_streak(sqlite3 *db) {
   return streak;
 }
 
-static void render_streak_bar(char *out_bar, size_t max_len, int streak) {
-  char *p = out_bar;
-  int limit = streak > 25 ? 25 : streak;
-  for (int i = 0; i < limit && (p - out_bar) < (int)max_len - 4; i++) {
-    strcpy(p, "█");
-    p += 3;
-  }
-  *p = '\0';
+static void get_last_7_days_activity(sqlite3 *db, const char *table, int activity[7]) {
+    memset(activity, 0, sizeof(int) * 7);
+    time_t now = time(NULL);
+    
+    for (int i = 0; i < 7; i++) {
+        int days_ago = 6 - i;
+        time_t t_target = now - (days_ago * 86400);
+        struct tm *tm_target = localtime(&t_target);
+        char date_str[32];
+        snprintf(date_str, sizeof(date_str), "%04d-%02d-%02d", 
+                 tm_target->tm_year + 1900, tm_target->tm_mon + 1, tm_target->tm_mday);
+        
+        char sql[256];
+        snprintf(sql, sizeof(sql), 
+                 "SELECT COUNT(*) FROM %s WHERE strftime('%%Y-%%m-%%d', logged_at) = '%s';", 
+                 table, date_str);
+        
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                int count = sqlite3_column_int(stmt, 0);
+                if (count > 0) {
+                    activity[i] = 1;
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+}
+
+static void render_heatmap_widget(sqlite3 *db) {
+    // 1. Fetch current date/time to find start/end/today weekday
+    time_t now = time(NULL);
+    struct tm *t_now = localtime(&now);
+    int today_wday = t_now->tm_wday; // 0 = Sunday, 1 = Monday, etc.
+    int today_idx = 52 * 7 + today_wday; // index of today in a 7x53 flat array
+    
+    // Allocate activity counts flat lookup (covers 372 elements for safety)
+    int activity[372] = {0};
+    
+    // 2. Query SQLite for activity in the past 371 days
+    const char *sql = 
+        "SELECT log_date, COUNT(*) as log_count "
+        "FROM ( "
+        "  SELECT strftime('%Y-%m-%d', logged_at) as log_date FROM workouts "
+        "  UNION ALL "
+        "  SELECT strftime('%Y-%m-%d', logged_at) as log_date FROM bodyweight "
+        "  UNION ALL "
+        "  SELECT strftime('%Y-%m-%d', logged_at) as log_date FROM sleep_log "
+        "  UNION ALL "
+        "  SELECT strftime('%Y-%m-%d', logged_at) as log_date FROM nutrition_log "
+        ") "
+        "WHERE log_date >= date('now', 'localtime', '-371 days') "
+        "GROUP BY log_date;";
+        
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *date_str = (const char *)sqlite3_column_text(stmt, 0);
+            int count = sqlite3_column_int(stmt, 1);
+            if (date_str) {
+                // Calculate days_ago in C using our high-precision math
+                int yr, mon, day;
+                if (sscanf(date_str, "%d-%d-%d", &yr, &mon, &day) == 3) {
+                    struct tm t_target = {0};
+                    t_target.tm_year = yr - 1900;
+                    t_target.tm_mon = mon - 1;
+                    t_target.tm_mday = day;
+                    t_target.tm_isdst = -1;
+                    time_t time_target = mktime(&t_target);
+                    if (time_target != (time_t)-1) {
+                        struct tm t_today = {0};
+                        t_today.tm_year = t_now->tm_year;
+                        t_today.tm_mon = t_now->tm_mon;
+                        t_today.tm_mday = t_now->tm_mday;
+                        t_today.tm_isdst = -1;
+                        time_t time_today = mktime(&t_today);
+                        
+                        double diff_seconds = difftime(time_today, time_target);
+                        int days_ago = (int)(diff_seconds / 86400.0 + 0.5);
+                        if (days_ago >= 0 && days_ago < 371) {
+                            activity[days_ago] = count;
+                        }
+                    }
+                }
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // Build month headers buffer with minimum 4 columns separation
+    char month_header[150];
+    memset(month_header, ' ', sizeof(month_header));
+    month_header[120] = '\0';
+    
+    int last_mon = -1;
+    int last_printed_col = -10;
+    for (int c = 0; c < 53; c++) {
+        int cell_idx = c * 7;
+        int days_ago = today_idx - cell_idx;
+        time_t t_col = now - (days_ago * 86400);
+        struct tm *tm_col = localtime(&t_col);
+        if (tm_col->tm_mon != last_mon) {
+            if (c - last_printed_col >= 3) {
+                const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+                int pos = 7 + (c * 2); // 7 offset on left
+                memcpy(&month_header[pos], months[tm_col->tm_mon], 3);
+                last_printed_col = c;
+                last_mon = tm_col->tm_mon;
+            }
+        }
+    }
+    printf(DIM "%s" RESET "\n", month_header);
+
+    // Total counts statistics
+    int total_active_days = 0;
+    int total_logs = 0;
+
+    for (int r = 0; r < 7; r++) {
+        // Render weekday label
+        if (r == 1) printf(DIM "  Mon  " RESET);
+        else if (r == 3) printf(DIM "  Wed  " RESET);
+        else if (r == 5) printf(DIM "  Fri  " RESET);
+        else printf("       ");
+
+        const char *current_color = NULL;
+
+        for (int c = 0; c < 53; c++) {
+            int cell_idx = c * 7 + r;
+            int days_ago = today_idx - cell_idx;
+            
+            if (days_ago < 0 || days_ago >= 371) {
+                if (current_color != NULL) {
+                    printf(RESET);
+                    current_color = NULL;
+                }
+                printf("  ");
+            } else {
+                int count = activity[days_ago];
+                if (count > 0) {
+                    total_active_days++;
+                    total_logs += count;
+                }
+                
+                const char *cell_color = NULL;
+                const char *cell_char = "■ ";
+                
+                if (count == 0) {
+                    cell_color = HM_LEVEL_0;
+                } else if (count == 1) {
+                    cell_color = HM_LEVEL_1;
+                } else if (count == 2) {
+                    cell_color = HM_LEVEL_2;
+                } else if (count == 3) {
+                    cell_color = HM_LEVEL_3;
+                } else {
+                    cell_color = HM_LEVEL_4;
+                }
+                
+                if (current_color == NULL || strcmp(current_color, cell_color) != 0) {
+                    if (current_color != NULL) {
+                        printf(RESET);
+                    }
+                    printf("%s", cell_color);
+                    current_color = cell_color;
+                }
+                printf("%s", cell_char);
+            }
+        }
+        if (current_color != NULL) {
+            printf(RESET);
+        }
+        printf("\n");
+    }
+
+    printf("\n");
+    print_thin_sep();
+    
+    // Render an elegant legend matching Monkeytype/Codeforces
+    printf("  " DIM "Less  " RESET HM_LEVEL_0 "■ " RESET HM_LEVEL_1 "■ " RESET HM_LEVEL_2 "■ " RESET HM_LEVEL_3 "■ " RESET HM_LEVEL_4 "■ " RESET DIM "  More" RESET);
+    printf("           " DIM "Active Days: " RESET WHITE "%d/365" RESET, total_active_days);
+    printf("  ·  " DIM "Total Logs: " RESET WHITE "%d" RESET "\n", total_logs);
 }
 
 void print_streak_dashboard(sqlite3 *db) {
@@ -1049,29 +1224,79 @@ void print_streak_dashboard(sqlite3 *db) {
   int weight_streak = calculate_streak(db, "bodyweight");
   int overall_streak = calculate_overall_streak(db);
 
-  char bar[128];
+  int workout_act[7], sleep_act[7], nutrition_act[7], weight_act[7], overall_act[7];
+  get_last_7_days_activity(db, "workouts", workout_act);
+  get_last_7_days_activity(db, "sleep_log", sleep_act);
+  get_last_7_days_activity(db, "nutrition_log", nutrition_act);
+  get_last_7_days_activity(db, "bodyweight", weight_act);
+  
+  for (int i = 0; i < 7; i++) {
+      overall_act[i] = (workout_act[i] && sleep_act[i] && nutrition_act[i] && weight_act[i]) ? 1 : 0;
+  }
+
   char streak_str[32];
+  time_t now = time(NULL);
+  const char *wdays[] = {"S", "M", "T", "W", "T", "F", "S"};
 
-  render_streak_bar(bar, sizeof(bar), workout_streak);
+  // Print Dynamic 7-day habits checklist header
+  printf("  " ACCENT BOLD "▸ last 7 days consistency checklist" RESET "\n\n");
+  printf("                            " DIM); // 28 spaces
+  for (int i = 0; i < 7; i++) {
+      int days_ago = 6 - i;
+      time_t t_col = now - (days_ago * 86400);
+      struct tm *tm_col = localtime(&t_col);
+      printf("%s  ", wdays[tm_col->tm_wday]);
+  }
+  printf(RESET "\n\n");
+
+  // Workout
   snprintf(streak_str, sizeof(streak_str), "%d day%s", workout_streak, workout_streak == 1 ? "" : "s");
-  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "workout", streak_str, bar);
+  printf("  %-14s%-12s", "workout", streak_str);
+  for (int i = 0; i < 7; i++) {
+      if (workout_act[i]) printf(ACCENT "■  " RESET);
+      else printf(DIM "·  " RESET);
+  }
+  printf("\n\n");
 
-  render_streak_bar(bar, sizeof(bar), sleep_streak);
+  // Sleep
   snprintf(streak_str, sizeof(streak_str), "%d day%s", sleep_streak, sleep_streak == 1 ? "" : "s");
-  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "sleep log", streak_str, bar);
+  printf("  %-14s%-12s", "sleep log", streak_str);
+  for (int i = 0; i < 7; i++) {
+      if (sleep_act[i]) printf(ACCENT "■  " RESET);
+      else printf(DIM "·  " RESET);
+  }
+  printf("\n\n");
 
-  render_streak_bar(bar, sizeof(bar), nutrition_streak);
+  // Nutrition
   snprintf(streak_str, sizeof(streak_str), "%d day%s", nutrition_streak, nutrition_streak == 1 ? "" : "s");
-  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "nutrition", streak_str, bar);
+  printf("  %-14s%-12s", "nutrition", streak_str);
+  for (int i = 0; i < 7; i++) {
+      if (nutrition_act[i]) printf(ACCENT "■  " RESET);
+      else printf(DIM "·  " RESET);
+  }
+  printf("\n\n");
 
-  render_streak_bar(bar, sizeof(bar), weight_streak);
+  // Bodyweight
   snprintf(streak_str, sizeof(streak_str), "%d day%s", weight_streak, weight_streak == 1 ? "" : "s");
-  printf("  %-14s%-9s" ACCENT "%s" RESET "\n", "bodyweight", streak_str, bar);
+  printf("  %-14s%-12s", "bodyweight", streak_str);
+  for (int i = 0; i < 7; i++) {
+      if (weight_act[i]) printf(ACCENT "■  " RESET);
+      else printf(DIM "·  " RESET);
+  }
+  printf("\n\n");
 
+  // Overall
+  snprintf(streak_str, sizeof(streak_str), "%d day%s", overall_streak, overall_streak == 1 ? "" : "s");
+  printf("  %-14s%-12s", "overall", streak_str);
+  for (int i = 0; i < 7; i++) {
+      if (overall_act[i]) printf(ACCENT "■  " RESET);
+      else printf(DIM "·  " RESET);
+  }
   printf("\n");
 
-  snprintf(streak_str, sizeof(streak_str), "%d day%s", overall_streak, overall_streak == 1 ? "" : "s");
-  printf("  %-14s%-9s" DIM "—" RESET " all four logged\n", "overall", streak_str);
+  print_thin_sep();
+  printf("  " ACCENT BOLD "▸ 365-day consistency heatmap" RESET "\n\n");
+  render_heatmap_widget(db);
 
   print_separator();
 }
@@ -1135,4 +1360,12 @@ void print_prs_dashboard(sqlite3 *db) {
   }
 
   print_separator();
+}
+
+void print_activity_heatmap(sqlite3 *db) {
+    print_logo();
+    print_separator();
+    printf("  " ACCENT BOLD "soma" RESET "  ·  activity consistency heatmap\n\n");
+    render_heatmap_widget(db);
+    print_separator();
 }

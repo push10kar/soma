@@ -13,24 +13,25 @@ static void print_help(void) {
     printf("  Usage: soma <command> [args]\n\n");
     
     printf(ACCENT "  ▸ display commands" RESET "\n");
-    printf("    %-32s%s\n", "soma [today]", "Unified Daily Briefing - compact logo, today's status badges, sleep/weight logged indicator, daily recommendation.");
-    printf("    %-32s%s\n", "soma status", "Full Health Ledger - long-form layout containing all dashboard grids for an end-of-week review.");
-    printf("    %-32s%s\n", "soma weekly", "Sunday Weekly Review - weekly targets, averages, PR tracking, and coaching verdict.");
-    printf("    %-32s%s\n", "soma streak", "Consistency Tracker - tracks logging streaks for workout, sleep, nutrition, bodyweight, and overall discipline.");
-    printf("    %-32s%s\n", "soma prs", "Personal Records Board - lists all current personal records with weight, reps, estimated 1RM, and date.");
-    printf("    %-32s%s\n", "soma physique", "Physique Analytics - multi-week bodyweight and waist sparklines, weekly velocity averages, and progression metrics.");
-    printf("    %-32s%s\n", "soma split [setup]", "Split Setup - configure or view your training split and schedule.");
-    printf("    %-32s%s\n", "soma recovery", "Recovery Analytics - daily sleep hour logs, weekly sleep averages, and CNS readiness scoring.");
-    printf("    %-32s%s\n", "soma nutrition", "Nutritional Progress - dynamic progress bars showing current macros logged today vs. total goals.");
-    printf("    %-32s%s\n", "soma suggest [exercise]", "Coaching Target - dynamic 30d progression target breakdown.");
-    printf("    %-32s%s\n\n", "soma history <exercise>", "workout log history and volume trends for a given exercise.");
+    printf("    %-38s%s\n", "soma [today]", "Show today's status & training splits");
+    printf("    %-38s%s\n", "soma status", "Full ledger of training & health stats");
+    printf("    %-38s%s\n", "soma weekly", "Sunday weekly overview & PR review");
+    printf("    %-38s%s\n", "soma streak", "Checklist & consistency heatmap dashboard");
+    printf("    %-38s%s\n", "soma prs", "List personal records & estimated 1RMs");
+    printf("    %-38s%s\n", "soma physique", "Bodyweight & waist velocity analytics");
+    printf("    %-38s%s\n", "soma split [setup]", "Set up or view training split schedule");
+    printf("    %-38s%s\n", "soma recovery", "Sleep stats & CNS readiness score");
+    printf("    %-38s%s\n", "soma nutrition", "Track today's macros vs target goals");
+    printf("    %-38s%s\n", "soma suggest [exercise]", "Get targeted 30d progression weight");
+    printf("    %-38s%s\n", "soma history <exercise>", "Log history & volume trend sparklines");
+    printf("    %-38s%s\n\n", "soma heatmap", "GitHub-style yearly consistency grid");
 
     printf(ACCENT "  ▸ logging commands" RESET "\n");
-    printf("    %-32s%s\n", "soma bodyweight log <w> [wt]", "Log daily bodyweight and optional waist measurement.");
-    printf("    %-32s%s\n", "soma sleep log <hrs> <ql>", "Log daily sleep hours and quality rating.");
-    printf("    %-32s%s\n", "soma nutrition log <c> <p> <cr> <f>", "Log daily macronutrients and calories.");
-    printf("    %-32s%s\n", "soma log <ex> <w>x<r>x<s>", "Shorthand Logging - e.g. soma log bench 80x5x3 (10 keystrokes).");
-    printf("    %-32s%s\n\n", "soma workout log ...", "Long-hand Logging - full parameter based logging.");
+    printf("    %-38s%s\n", "soma bodyweight log <w> [wt]", "Log daily weight and waist size");
+    printf("    %-38s%s\n", "soma sleep log <hrs> <ql>", "Log sleep hours and quality (1-5)");
+    printf("    %-38s%s\n", "soma nutrition log <c> <p> <cr> <f>", "Log daily calories & macros");
+    printf("    %-38s%s\n", "soma log <ex> <w>x<r>x<s>", "Shorthand logging (e.g. bench 80x5x3)");
+    printf("    %-38s%s\n\n", "soma workout log ...", "Full workout logging with parameters");
 }
 
 int main(int argc, char *argv[]) {
@@ -274,6 +275,12 @@ int main(int argc, char *argv[]) {
     
     if (strcmp(argv[1], "nutrition") == 0) {
         print_nutrition_dashboard(db);
+        db_close(db);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "heatmap") == 0 || strcmp(argv[1], "activity") == 0) {
+        print_activity_heatmap(db);
         db_close(db);
         return 0;
     }

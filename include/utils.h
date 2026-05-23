@@ -11,6 +11,12 @@
 #define BOLD     "\033[1m"
 #define RESET    "\033[0m"
 
+#define HM_LEVEL_0 "\033[38;2;22;28;12m"
+#define HM_LEVEL_1 "\033[38;2;72;96;20m"
+#define HM_LEVEL_2 "\033[38;2;110;150;18m"
+#define HM_LEVEL_3 "\033[38;2;148;210;10m"
+#define HM_LEVEL_4 "\033[38;2;184;255;0m"
+
 void print_logo(void);
 void print_separator(void);
 void print_thin_sep(void);

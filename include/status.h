@@ -35,4 +35,7 @@ void print_streak_dashboard(sqlite3 *db);
 /* Renders the personal records leaderboard board */
 void print_prs_dashboard(sqlite3 *db);
 
+/* Renders the Monkeytype/GitHub-style consistency heatmap */
+void print_activity_heatmap(sqlite3 *db);
+
 #endif /* STATUS_H */

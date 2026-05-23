@@ -202,9 +202,6 @@ int main(int argc, char *argv[]) {
     
     /* Default: show demo/visualization (existing code) */
     sqlite3 *db = db_open();
-    
-    /* Seed the database if it is empty to ensure a beautiful initial experience */
-    db_seed(db);
 
     /* Manual route: soma split setup / soma split */
     if (argc >= 2 && strcmp(argv[1], "split") == 0) {

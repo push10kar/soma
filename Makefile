@@ -18,8 +18,13 @@ clean:
 
 install: $(TARGET)
 	cp $(TARGET) /usr/local/bin/$(TARGET)
+	sudo cp soma.bash /etc/bash_completion.d/soma
+	@echo "installed soma → /usr/local/bin/soma"
+	@echo "completions  → /etc/bash_completion.d/soma"
+	@echo "run: source ~/.bashrc"
 
 uninstall:
 	rm -f /usr/local/bin/$(TARGET)
+	sudo rm -f /etc/bash_completion.d/soma
 
 .PHONY: all clean install uninstall
